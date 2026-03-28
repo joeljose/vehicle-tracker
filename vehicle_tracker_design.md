@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-A GPU-accelerated traffic junction monitoring system that detects vehicles, tracks them through the junction, determines their directional transit (entry arm to exit arm), and generates alerts with best-quality vehicle photos. The system supports both recorded video files and live RTSP streams from IP cameras at real traffic junctions.
+A GPU-accelerated traffic junction monitoring system that detects vehicles, tracks them through the junction, determines their directional transit (entry arm to exit arm), and generates alerts with best-quality vehicle photos. The system supports both recorded video files and YouTube Live streams from traffic cameras at real traffic junctions.
 
 **Target junctions:** 741 & 73, 741 & Lytle South, Drugmart & 73.
 
@@ -126,7 +126,7 @@ class PipelineBackend(Protocol):
         ...
 
     def add_channel(self, channel_id: int, source: str) -> None:
-        """Add a video source (file path or RTSP URL) to the pipeline."""
+        """Add a video source (file path or resolved HLS URL) to the pipeline."""
         ...
 
     def remove_channel(self, channel_id: int) -> None:
@@ -205,6 +205,108 @@ def create_app(backend: str = "deepstream") -> FastAPI:
 
 ---
 
+## 3.4 Source Resolver — YouTube Live URL Resolution
+
+The system accepts two source types: local file paths and YouTube Live URLs. File paths are passed directly to the pipeline. YouTube URLs require resolution to an HLS stream URL before the pipeline can consume them.
+
+**Resolution flow:**
+```
+Operator pastes YouTube URL in UI
+    → POST /channel/add { "source": "https://youtube.com/watch?v=..." }
+    → Backend detects YouTube URL pattern
+    → yt-dlp extracts available stream formats and best HLS URL
+    → Available qualities returned to frontend for UI dropdown
+    → Resolved HLS URL passed to pipeline (nvurisrcbin handles HLS natively)
+```
+
+**Source resolver module:**
+```python
+# backend/pipeline/source_resolver.py
+
+@dataclass
+class ResolvedSource:
+    """Result of resolving a user-provided source string."""
+    source_type: Literal["file", "youtube_live"]
+    stream_url: str                    # file path or resolved HLS URL
+    original_url: str                  # what the user provided
+    qualities: list[dict] | None       # available qualities (YouTube only)
+    selected_quality: str | None       # e.g. "1080p", "720p"
+
+def resolve_source(source: str, preferred_quality: str | None = None) -> ResolvedSource:
+    """Resolve a user-provided source to a pipeline-consumable URL.
+
+    For file paths: validates the file exists, returns as-is.
+    For YouTube URLs: extracts HLS URL via yt-dlp, returns resolved URL + quality options.
+    """
+    ...
+
+def check_stream_liveness(original_url: str) -> bool:
+    """Check if a YouTube Live stream is still broadcasting.
+    Used during stream recovery to distinguish 'stream ended' from 'network issue'."""
+    ...
+
+def re_extract_url(original_url: str, preferred_quality: str | None = None) -> str:
+    """Re-extract a fresh HLS URL from a YouTube Live URL.
+    Used during stream recovery when the existing HLS URL has expired."""
+    ...
+```
+
+**Stream recovery strategy** (implemented in the source manager, invoked when the pipeline detects a stream interruption):
+
+1. **Retry existing HLS URL** — 3 attempts with backoff (5s, 10s, 20s). Most interruptions are transient network issues; the HLS URL is still valid.
+2. **Check liveness** — If retries fail, call `check_stream_liveness()` via `yt-dlp --dump-json`.
+   - **Stream ended:** Transition channel to Phase 3 automatically.
+   - **Stream still live:** The HLS URL may have expired. Call `re_extract_url()` to get a fresh one.
+3. **Re-extract and reconnect** — If re-extraction succeeds, reconnect the pipeline with the new URL.
+4. **Give up** — If re-extraction also fails, surface the error to the operator via a `pipeline_event` WebSocket message. Operator can manually retry or remove the channel.
+
+**Quality selection:**
+- Default: best available quality (highest resolution).
+- `POST /channel/add` response includes `qualities` list for the frontend to populate a dropdown.
+- `PATCH /channel/{id}/quality` allows the operator to switch quality at runtime (triggers URL re-extraction at the new quality and pipeline source swap).
+
+**yt-dlp invocation for URL resolution:**
+```python
+# Extract stream info (formats, HLS URL, liveness)
+result = subprocess.run(
+    ["yt-dlp", "--dump-json", "--no-download", youtube_url],
+    capture_output=True, text=True, timeout=30
+)
+info = json.loads(result.stdout)
+# info["is_live"] → True if stream is live
+# info["formats"] → list of available formats with "url" fields
+# Filter for HLS formats: format["protocol"] == "m3u8_native"
+
+# Extract direct HLS URL at a specific quality
+result = subprocess.run(
+    ["yt-dlp", "-f", f"bv*[height<={height}]", "--get-url", youtube_url],
+    capture_output=True, text=True, timeout=30
+)
+hls_url = result.stdout.strip()
+```
+
+**Critical yt-dlp flags** (learned from production use in youtube-downloader project):
+- `--no-live-from-start` — Do NOT use `--live-from-start`. Old HLS fragments get purged by YouTube causing 404/500 errors.
+- `--hls-use-mpegts` — Required for HLS stream compatibility.
+- `--wait-for-video 5` — Robustness for streams that haven't fully started.
+- Format selection: `bv*[height<=N]+ba/b[height<=N]` for quality presets, `bv*+ba/b` for best.
+
+**Note:** These flags apply when yt-dlp is used as a downloader. For URL resolution (`--dump-json`, `--get-url`), only the format filter (`-f`) is needed. The HLS URL returned by `--get-url` is fed directly to DeepStream's `nvurisrcbin`, which handles HLS consumption natively.
+
+**Dependencies:**
+- `yt-dlp` binary installed in the Docker container (pinned version in Dockerfile).
+- `deno` runtime installed in the Docker container — **required by yt-dlp for YouTube JavaScript extraction**. Without deno, many streams fail or return limited formats.
+- `ffmpeg` available in the container (already present in the DeepStream base image).
+- Called as a subprocess (`subprocess.run(["yt-dlp", ...])`) — not as a Python library — for isolation and easy version pinning.
+
+**Key constraints:**
+- YouTube HLS URLs expire after ~6 hours. Sessions are expected to be ~1 hour max, so expiry is unlikely but handled via re-extraction.
+- `yt-dlp` is an external tool that requires periodic updates as YouTube changes its API. The version is pinned in the Dockerfile.
+- `deno` is similarly pinned — needed for yt-dlp's YouTube extractor to run JavaScript from YouTube's player.
+- Resolution adds 2-5 seconds latency at channel add time (one-time cost).
+
+---
+
 ## 4. Phase Routing Design
 
 **Principle: "Always infer, conditionally analyze."**
@@ -263,7 +365,7 @@ for channel_id, detections in batch_results.items():
 - Requests are queued in a thread-safe queue.
 - The pipeline thread drains the queue **between frame batches**, under a mutex, ensuring no mid-frame state corruption.
 - **Phase 1 to 2 transition:** Creates a fresh tracker instance for that channel (clears all existing track IDs). For DeepStream, this means resetting the tracker's per-source state. For recorded video, playback resets to frame 0 and plays once (no loop).
-- **Phase 2 to 3 transition:** For recorded video, triggered automatically at video end or manually by the operator. For RTSP, triggered by stream drop or operator click "Stop". The source is removed from the pipeline (DeepStream: runtime source delete via `nvstreammux`).
+- **Phase 2 to 3 transition:** For recorded video, triggered automatically at video end or manually by the operator. For YouTube Live, triggered by stream end/drop (after recovery attempts fail) or operator click "Stop". The source is removed from the pipeline (DeepStream: runtime source delete via `nvstreammux`).
 - **Phase 3 to 4 transition:** Removes the channel entirely. All in-memory data (alerts, snapshots, replay data) is cleared.
 
 ```python
@@ -292,7 +394,7 @@ def process_frame_batch():
 
 | Aspect | Detail |
 |---|---|
-| Trigger | Operator adds a video source (file or RTSP URL) |
+| Trigger | Operator adds a video source (file path or YouTube Live URL) |
 | Video behavior | Plays immediately; recorded files loop continuously |
 | Inference | Detection + tracking active (preview overlay with boxes and IDs) |
 | Operator actions | Draw ROI polygon, draw entry/exit lines, label arms, adjust thresholds |
@@ -305,7 +407,7 @@ def process_frame_batch():
 | Aspect | Detail |
 |---|---|
 | Trigger | Operator clicks "Start Analytics" |
-| Video behavior | Recorded: resets to frame 0, plays once (no loop). RTSP: starts from current time |
+| Video behavior | Recorded: resets to frame 0, plays once (no loop). YouTube Live: starts from current time |
 | Inference | Full pipeline: detection + tracking + direction + alerts + best-photo |
 | Tracker | Fresh instance created (all prior track IDs cleared) |
 | Alerts | Transit alerts on line crossing or track exit. Stagnant alerts after 2.5 minutes stopped |
@@ -316,10 +418,10 @@ def process_frame_batch():
 
 | Aspect | Detail |
 |---|---|
-| Trigger | Video end (recorded), RTSP stream drop, or operator clicks "Stop" |
+| Trigger | Video end (recorded), YouTube Live stream end/drop (after recovery fails), or operator clicks "Stop" |
 | Alert feed | Persists — all alerts from Phase 2 remain visible and clickable |
 | Replay (recorded) | Click alert to jump to timestamp in original video. `<video>` element with canvas overlay draws stored per-frame bboxes and trajectory |
-| Replay (RTSP) | Frozen last frame displayed as `<img>`. Stored bboxes animated on `<canvas>` overlay at original timing |
+| Replay (YouTube Live) | Frozen last frame displayed as `<img>`. Stored bboxes animated on `<canvas>` overlay at original timing |
 | Export | Option to render annotated video with fading trajectory overlay (recorded only, uses NVENC) |
 
 ### Phase 4 — Teardown
@@ -721,7 +823,7 @@ When a scene is empty (e.g., all traffic stopped at a red light off-camera), run
 
 **Implementation:**
 
-- DeepStream: `pgie.set_property('interval', 15)` for idle, `pgie.set_property('interval', 0)` for active.
+- DeepStream: `pipeline["nvinfer_name"].set({"interval": 15})` for idle, `.set({"interval": 0})` for active (pyservicemaker Node API — dict syntax, not key-value).
 - Custom: skip the TensorRT inference call on non-inference frames, pass empty detections to tracker.
 
 ---
@@ -814,9 +916,9 @@ function syncOverlay(video, canvas, alertData) {
 }
 ```
 
-### 13.3 Phase 3 Replay — RTSP (No Original Video)
+### 13.3 Phase 3 Replay — YouTube Live (No Original Video)
 
-Since there is no recorded file for RTSP sources, replay uses stored data only:
+Since there is no recorded file for YouTube Live sources, replay uses stored data only:
 
 ```
 Frontend:
@@ -1176,10 +1278,11 @@ Each junction has a saved configuration file. Loaded when the same site is added
 |---|---|---|---|---|
 | POST | `/pipeline/start` | — | `{"status": "started"}` | Boots the inference pipeline |
 | POST | `/pipeline/stop` | — | `{"status": "stopped"}` | Stops all inference |
-| POST | `/channel/add` | `{"source": "rtsp://..." \| "/path/file.mp4"}` | `{"channel_id": 0}` | Adds source, enters Phase 1 |
+| POST | `/channel/add` | `{"source": "https://youtube.com/watch?v=..." \| "/path/file.mp4"}` | `{"channel_id": 0, "qualities": [...]}` | Adds source, resolves YouTube URL if needed, enters Phase 1 |
 | POST | `/channel/remove` | `{"channel_id": 0}` | `{"status": "removed"}` | Phase 4 teardown |
 | POST | `/channel/{id}/phase` | `{"phase": "setup" \| "analytics" \| "review"}` | `{"status": "ok", "phase": "analytics"}` | Transition channel phase |
 | PATCH | `/config` | `{"confidence_threshold": 0.5}` | `{"status": "updated"}` | Runtime config update |
+| PATCH | `/channel/{id}/quality` | `{"quality": "720p"}` | `{"status": "updated"}` | Change YouTube stream quality (triggers URL re-extraction) |
 
 ### Video
 
@@ -1231,6 +1334,7 @@ backend/
 │   │   ├── preprocess.py          # CUDA NV12->RGB, resize, normalize
 │   │   ├── detector.py            # TensorRT YOLOv8s inference
 │   │   └── tracker.py             # ByteTrack wrapper
+│   ├── source_resolver.py         # YouTube URL → HLS resolution via yt-dlp, liveness check, quality listing
 │   ├── direction.py               # Line-crossing detection, direction state machine, inference
 │   ├── snapshot.py                # Best-photo scoring, cropping, in-memory storage
 │   ├── roi.py                     # Point-in-polygon filtering (ray casting)
@@ -1500,7 +1604,7 @@ git tag v0.2.0    →  version = "0.2.0"
 | M1-M2 | 0.1.0 | First working pipeline (DeepStream, single channel, alerts) |
 | M3-M4 | 0.2.0 | API + UI working end-to-end |
 | M5-M6 | 0.3.0 | Full workflow (setup, analytics, review with replay) |
-| M7-M8 | 0.4.0 | Multi-channel + RTSP |
+| M7-M8 | 0.4.0 | Multi-channel + YouTube Live |
 | M9 | 0.5.0 | Custom pipeline alternative |
 | M10 | 1.0.0 | Production-ready release |
 
@@ -1514,8 +1618,11 @@ GPU-dependent software cannot be distributed as pip packages or standalone binar
 ```dockerfile
 FROM nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
 
-# System dependencies
-RUN apt-get update && apt-get install -y python3-pip nodejs npm
+# System dependencies + yt-dlp + deno (required for YouTube JS extraction)
+RUN apt-get update && apt-get install -y python3-pip nodejs npm curl unzip \
+    && pip3 install --break-system-packages yt-dlp \
+    && curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+    && unzip /tmp/deno.zip -d /usr/local/bin && rm /tmp/deno.zip
 
 # Backend
 COPY backend/ /app/backend/
@@ -1655,8 +1762,8 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | **M3** | FastAPI API layer | All REST endpoints, WebSocket broadcaster, MJPEG streaming — pipeline-agnostic API boundary |
 | **M4** | React shell | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls |
 | **M5** | ROI + line drawing UI | Canvas-based ROI polygon + entry/exit line drawing tools, site config persistence |
-| **M6** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for RTSP, per-alert replay data |
+| **M6** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for YouTube Live, per-alert replay data |
 | **M7** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
-| **M8** | RTSP with reconnect | Live RTSP source support with automatic reconnection |
+| **M8** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic |
 | **M9** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
 | **M10** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |

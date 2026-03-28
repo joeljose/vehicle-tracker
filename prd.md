@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.2
+**Version:** 0.3
 **Status:** Draft
 **Last updated:** March 2026
 
@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-This document defines the product requirements for a GPU-accelerated vehicle tracking system designed specifically for **traffic junction monitoring**. The system detects vehicles at road junctions, determines their directional transit (which arm they entered from and exited to), and generates alerts with best-quality vehicle photos. It supports both recorded video analysis and live RTSP stream monitoring from a single consumer GPU machine with a browser-based UI.
+This document defines the product requirements for a GPU-accelerated vehicle tracking system designed specifically for **traffic junction monitoring**. The system detects vehicles at road junctions, determines their directional transit (which arm they entered from and exited to), and generates alerts with best-quality vehicle photos. It supports both recorded video analysis and YouTube Live stream monitoring from a single consumer GPU machine with a browser-based UI.
 
 This PRD serves as the single source of truth for development decisions and milestone planning.
 
@@ -19,7 +19,7 @@ This PRD serves as the single source of truth for development decisions and mile
 
 Traffic engineers and analysts monitoring road junctions need to understand vehicle movement patterns: which directions vehicles travel through the junction, how long they take, and whether any vehicles become stagnant (blocking an arm for extended periods). Current approaches either require expensive commercial systems, rely on manual observation, or use generic tracking tools that provide raw bounding boxes without junction-specific intelligence.
 
-This project solves that by running the full pipeline -- decode, detect, track, classify direction, generate alerts -- on a single consumer GPU machine. The system produces directional transit alerts with vehicle photos, supports replay and review of recorded footage, and provides a browser UI for ROI configuration, alert monitoring, and video replay.
+This project solves that by running the full pipeline -- decode, detect, track, classify direction, generate alerts -- on a single consumer GPU machine. The system produces directional transit alerts with vehicle photos, supports YouTube Live streams and recorded footage, and provides a browser UI for ROI configuration, alert monitoring, and video replay.
 
 **Target junctions (initial deployment):**
 - 741 & 73
@@ -35,7 +35,7 @@ Seven videos from these three junctions have been collected for development and 
 - Detect and track vehicles at traffic junctions using pre-trained models (no finetuning required for v1)
 - Determine directional transit (entry arm to exit arm) for each vehicle passing through the junction
 - Generate alerts with a best-quality vehicle photo on transit completion or stagnant detection
-- Support recorded video files (analyze then review) and RTSP streams (live monitoring) through the same pipeline
+- Support recorded video files (analyze then review) and YouTube Live streams (live monitoring) through the same pipeline
 - Provide a browser-based UI with an alert feed, ROI/line drawing tools, and video replay capability
 - Keep the entire system self-contained on a single local machine with a consumer-grade NVIDIA GPU (RTX 4050 Mobile, 6 GB VRAM)
 
@@ -71,23 +71,23 @@ Someone who uses the UI to monitor live feeds, review alerts, and replay vehicle
 Each channel independently progresses through four phases. Multiple channels can be in different phases simultaneously.
 
 ### Phase 1 -- Setup
-- Operator adds a video source (file path or RTSP URL). Video plays immediately (loops for recorded files).
+- Operator adds a video source (file path or YouTube Live URL). Video plays immediately (loops for recorded files).
 - Detection and tracking run as a live preview -- bounding boxes with track IDs are drawn on the video. This provides visual feedback for configuration.
 - Operator draws a broad ROI polygon and entry/exit lines on the video using canvas drawing tools. Operator labels each arm (defaults: N/E/S/W, editable to road names like "741-North").
 - No alerts, direction detection, or best-photo capture occur in this phase.
 - Site configuration (ROI, lines, labels) can be saved to disk and reloaded for the same junction.
 
 ### Phase 2 -- Analytics
-- Operator clicks "Start Analytics". For recorded video: playback restarts from frame 0 and plays once. For RTSP: analytics starts from the current moment.
+- Operator clicks "Start Analytics". For recorded video: playback restarts from frame 0 and plays once. For YouTube Live: analytics starts from the current moment.
 - Tracker is reset (fresh instance created for the channel) to avoid stale tracks from Phase 1.
 - Full pipeline runs: detection, tracking, direction detection (line crossing), best-photo capture, vehicle state classification, and alert generation.
 - Transit alerts and stagnant alerts appear in the alert feed sidebar in real time.
 
 ### Phase 3 -- Review
-- Triggered by: recorded video reaching end-of-file, RTSP stream dropping, or operator clicking "Stop".
+- Triggered by: recorded video reaching end-of-file, YouTube Live stream ending or dropping, or operator clicking "Stop".
 - Alert feed remains visible and interactive. No new alerts are generated.
 - **Recorded video:** Click an alert to jump to that timestamp in the video. Video replays the segment with stored per-frame bounding box and trajectory overlays drawn on a canvas layer. Native `<video>` controls available.
-- **RTSP (no recording):** Click an alert to see stored bounding boxes animated on a frozen last frame, replaying the vehicle's trajectory at original timing.
+- **YouTube Live (no recording):** Click an alert to see stored bounding boxes animated on a frozen last frame, replaying the vehicle's trajectory at original timing.
 - Option to export an annotated video with fading trajectory overlays (recorded video sources only). Export is triggered on exiting Phase 3.
 
 ### Phase 4 -- Teardown
@@ -114,10 +114,11 @@ Each channel independently progresses through four phases. Multiple channels can
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-01 | System accepts RTSP stream URLs as input sources | Must |
+| F-01 | System accepts YouTube Live stream URLs as input sources. Backend resolves the YouTube URL to an HLS stream URL via `yt-dlp` at channel add time. | Must |
 | F-02 | System accepts local video files (mp4, mkv, avi) as input sources | Must |
 | F-03 | Architecture supports N simultaneous channels -- the channel limit is a runtime config value, not a structural constraint | Must |
-| F-04 | RTSP sources automatically reconnect after network drops without restarting the pipeline | Must |
+| F-04 | YouTube Live stream recovery: on stream interruption, retry the existing HLS URL up to 3 times (5s, 10s, 20s backoff). If retries fail, check if the stream is still live via `yt-dlp`. If the stream ended, move to Phase 3 automatically. If the stream is still live but the URL is stale, re-extract the URL once and reconnect. If still failing, surface the error to the operator. | Must |
+| F-04a | Stream quality selection: best available quality by default. Operator can change quality from the UI per channel. Quality options are fetched from `yt-dlp` at channel add time. | Must |
 | F-05 | File sources play once during Phase 2 (analytics); loop during Phase 1 (setup preview) | Must |
 | F-06 | Channels can be added or removed at runtime via the UI without restarting the pipeline | Must |
 | F-07 | Each channel progresses through phases independently -- one channel in Setup while another is in Analytics | Must |
@@ -224,7 +225,7 @@ Each channel independently progresses through four phases. Multiple channels can
 |---|---|---|
 | F-58 | `POST /pipeline/start` -- start the pipeline | Must |
 | F-59 | `POST /pipeline/stop` -- stop the pipeline and clean up GPU resources | Must |
-| F-60 | `POST /channel/add` -- add a new source channel (`{ source: "rtsp://..." \| "/path/file.mp4" }`) | Must |
+| F-60 | `POST /channel/add` -- add a new source channel (`{ source: "https://youtube.com/watch?v=..." \| "/path/file.mp4" }`) | Must |
 | F-61 | `POST /channel/remove` -- remove a channel (`{ channel_id: 0 }`) | Must |
 | F-62 | `POST /channel/{id}/phase` -- transition a channel's phase (`{ phase: "setup" \| "analytics" \| "review" }`) | Must |
 | F-63 | `PATCH /config` -- update runtime parameters (e.g., confidence threshold) | Must |
@@ -244,7 +245,7 @@ Each channel independently progresses through four phases. Multiple channels can
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-75 | Control panel allows adding and removing source channels (RTSP URL or file path) | Must |
+| F-75 | Control panel allows adding and removing source channels (YouTube Live URL or file path) | Must |
 | F-76 | Control panel allows starting and stopping the pipeline | Must |
 | F-77 | Control panel exposes a confidence threshold slider that updates the backend in real time | Must |
 | F-78 | Phase indicator displayed per channel showing current phase (Setup / Analytics / Review) | Must |
@@ -252,7 +253,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-80 | UI renders one video panel per active channel dynamically -- no hardcoded panel count | Must |
 | F-81 | Video panel renders MJPEG via `<img>` tag during Phase 1 and Phase 2 | Must |
 | F-82 | Video panel renders `<video>` element with `<canvas>` overlay for Phase 3 replay (recorded video) | Must |
-| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for Phase 3 replay (RTSP) | Must |
+| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for Phase 3 replay (YouTube Live) | Must |
 | F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Phase 1 | Must |
 | F-85 | Stats bar shows fps, active track count, and inference latency per channel | Must |
 | F-86 | UI connects to the backend WebSocket on load and reconnects automatically on drop | Must |
@@ -267,7 +268,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-90 | Filter buttons at top of feed: All, Transit, Stagnant | Must |
 | F-91 | Click a compact card to expand it (accordion style) showing: full metadata, trajectory minimap on a junction snapshot, download best photo button | Must |
 | F-92 | Click an alert during Phase 3 (recorded): video panel jumps to that timestamp and replays segment with stored bounding box overlay via `requestVideoFrameCallback()` | Must |
-| F-93 | Click an alert during Phase 3 (RTSP): animated bounding box replays on frozen last frame at original timing | Must |
+| F-93 | Click an alert during Phase 3 (YouTube Live): animated bounding box replays on frozen last frame at original timing | Must |
 
 ### 8.14 UI -- Widgets (v1 Scope)
 
@@ -298,7 +299,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | NF-11 | Pinned (page-locked) host memory used for all CPU-GPU transfers |
 | NF-12 | WebSocket `frame_data` messages delivered within one frame period (~33 ms) of inference completion |
 | NF-13 | Graceful shutdown: GPU resources and decoder sessions released cleanly on stop |
-| NF-14 | No external network calls -- fully offline capable after initial model download |
+| NF-14 | Offline capable for file sources after initial model download. YouTube Live sources require internet access for `yt-dlp` URL resolution and HLS stream consumption. |
 | NF-15 | Frontend runs in any modern Chromium-based browser without plugins |
 
 ---
@@ -334,7 +335,7 @@ Browser (React, localhost)
                    |
                    v
             Pipeline core (DeepStream OR Custom -- never both)
-            |-- Source manager    (RTSP / file, multi-channel mux)
+            |-- Source manager    (YouTube Live / file, multi-channel mux)
             |-- Decoder           (NVDEC / DeepStream internal)
             |-- Inference engine  (TensorRT, shared across channels)
             |-- Tracker           (NvDCF or ByteTrack, one instance per channel)
@@ -362,11 +363,11 @@ Browser opens -> WebSocket connects -> operator adds channels -> draws ROI/lines
 | **Decode** | DeepStream internal (nvv4l2decoder) | NVDEC via Video Codec SDK or PyNvCodec |
 | **Multi-channel** | `nvstreammux` batches sources natively | Manual batching of decoded frames |
 | **Phase routing** | GStreamer pad probe on `frame_meta.source_id` | if/elif after inference |
-| **Idle optimization** | `pgie.set_property('interval', 15)` | Skip TensorRT call |
+| **Idle optimization** | `node.set({"interval": 15})` via pyservicemaker | Skip TensorRT call |
 | **Runtime source add/remove** | Supported natively | Manual pipeline reconfiguration |
 | **Learning curve** | High (GStreamer + DeepStream APIs) | Moderate (direct CUDA/TRT APIs) |
 | **Flexibility** | Constrained by GStreamer plugin model | Full control over every step |
-| **RTSP handling** | Built-in with reconnect plugins | Manual reconnect logic |
+| **YouTube Live handling** | `yt-dlp` resolves URL → HLS → `nvurisrcbin` handles natively | `yt-dlp` resolves URL → HLS → manual decode |
 
 **Decision:** Build the DeepStream pipeline first (M1-M8). Build the custom pipeline second (M9) as an alternative implementation behind the same API. Both are standalone -- they are never mixed or run simultaneously.
 
@@ -492,9 +493,9 @@ duration_ms, frames_stationary
 | M3 -- API layer | FastAPI server with all REST + WebSocket + MJPEG endpoints. Pipeline-agnostic API boundary. Pipeline controllable from curl. | M2 |
 | M4 -- React shell | Control panel, video panels (MJPEG), alert feed sidebar, stats bar, phase controls, WebSocket integration | M3 |
 | M5 -- Drawing tools + site config | ROI polygon and entry/exit line drawing UI on canvas overlay. Site config save/load (JSON). Label editing. | M4 |
-| M6 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for RTSP. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M5 |
+| M6 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for YouTube Live. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M5 |
 | M7 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M6 |
-| M8 -- RTSP with reconnect | RTSP source with automatic reconnect logic. Tested on live camera feed. | M7 |
+| M8 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M7 |
 | M9 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M3 |
 | M10 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M8 |
 
@@ -510,7 +511,9 @@ duration_ms, frames_stationary
 | Pre-trained models miss vehicles in target junction footage (unusual angles/distances) | Medium | Medium | Evaluate TrafficCamNet and YOLOv8s COCO on all 7 target videos before committing. Finetuning deferred to v2 but is the planned escape hatch. |
 | Per-frame bbox storage for replay consumes too much memory at scale | Low | Medium | 85 MB for 45 min is acceptable. Monitor actual usage. Can downsample to every Nth frame if needed. |
 | Python GIL causes frame drops on 2-channel load | Low | Medium | Profile first. Move decode loop to subprocess or C extension if needed. DeepStream handles threading internally. |
-| MJPEG latency unacceptable for RTSP sources | Low | Low | Acceptable for local display. WebRTC as v2 upgrade path if needed. |
+| MJPEG latency unacceptable for YouTube Live sources | Low | Low | YouTube Live already has 5-15s HLS latency; MJPEG adds negligible overhead on top. WebRTC as v2 upgrade path if needed. |
+| `yt-dlp` breaks due to YouTube API changes | Medium | High | Pin `yt-dlp` version, update periodically. Fallback: operator can manually extract HLS URL and paste it directly. |
+| YouTube Live HLS latency (5-15s) unacceptable for alerting | Low | Low | Acceptable for traffic monitoring — alerts are for review, not real-time response. |
 
 ---
 
@@ -527,6 +530,7 @@ duration_ms, frames_stationary
 - JSON export of alert data
 - User authentication on the UI
 - Mobile UI
+- RTSP IP camera sources (v1 targets YouTube Live streams only; RTSP can be added in v2)
 - WebRTC video transport
 - StrongSORT / BoT-SORT tracker upgrades
 - C++ port of pipeline hot paths
