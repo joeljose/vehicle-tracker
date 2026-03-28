@@ -199,18 +199,29 @@ class DirectionStateMachine:
         self.exit_label: str | None = None
         self.was_stagnant = False
 
-    def on_crossing(self, arm_id: str, label: str, crossing_type: str) -> dict | None:
+    def on_crossing(
+        self,
+        arm_id: str,
+        label: str,
+        crossing_type: str,
+        trajectory: list[tuple[int, int, int]] | None = None,
+        arms: dict[str, LineSeg] | None = None,
+    ) -> dict | None:
         """Handle a line crossing event.
 
         Args:
             arm_id: Which arm was crossed (e.g. "north").
             label: Human label (e.g. "741-North").
             crossing_type: "entry" or "exit".
+            trajectory: Current trajectory (needed for inferring entry on exit-first).
+            arms: All arms (needed for inferring entry on exit-first).
 
         Returns:
             A transit alert dict if this crossing completes a transit, else None.
         """
-        if crossing_type == "entry" and self.state == TrackState.UNKNOWN:
+        if crossing_type == "entry" and self.state in (
+            TrackState.UNKNOWN, TrackState.WAITING, TrackState.STAGNANT,
+        ):
             self.entry_arm = arm_id
             self.entry_label = label
             self.state = TrackState.IN_TRANSIT
@@ -231,6 +242,24 @@ class DirectionStateMachine:
                 "method": "confirmed",
                 "was_stagnant": self.was_stagnant,
             }
+
+        if crossing_type == "exit" and self.state == TrackState.UNKNOWN:
+            # Exit without entry — infer entry from trajectory heading
+            self.exit_arm = arm_id
+            self.exit_label = label
+            if trajectory and arms:
+                inferred_entry = nearest_arm(trajectory, arms, use_start=True)
+                if inferred_entry and inferred_entry != arm_id:
+                    self.entry_arm = inferred_entry
+                    self.entry_label = arms[inferred_entry].label
+                    return {
+                        "entry_arm": self.entry_arm,
+                        "entry_label": self.entry_label,
+                        "exit_arm": self.exit_arm,
+                        "exit_label": self.exit_label,
+                        "method": "inferred",
+                        "was_stagnant": self.was_stagnant,
+                    }
 
         return None
 
@@ -275,9 +304,6 @@ class DirectionStateMachine:
 
     def check_stagnant(self, trajectory: list[tuple[int, int, int]]) -> bool:
         """Check if vehicle is stagnant. Returns True on state transition to STAGNANT."""
-        if self.state not in (TrackState.IN_TRANSIT, TrackState.WAITING):
-            return False
-
         if len(trajectory) < self.stagnant_window_frames:
             return False
 
@@ -288,13 +314,18 @@ class DirectionStateMachine:
         )
 
         if displacement < self.motion_threshold_px:
-            if self.state != TrackState.STAGNANT:
+            if self.state not in (TrackState.WAITING, TrackState.STAGNANT):
+                self._state_before_wait = self.state
+                self.state = TrackState.WAITING
+            if self.state == TrackState.WAITING:
                 self.state = TrackState.STAGNANT
                 self.was_stagnant = True
                 return True
+            return False  # already STAGNANT, don't re-trigger
         else:
-            # Moving again
+            # Moving again — return to previous state
             if self.state in (TrackState.WAITING, TrackState.STAGNANT):
-                self.state = TrackState.IN_TRANSIT
+                prev = getattr(self, "_state_before_wait", TrackState.UNKNOWN)
+                self.state = TrackState.IN_TRANSIT if self.entry_arm else prev
 
         return False

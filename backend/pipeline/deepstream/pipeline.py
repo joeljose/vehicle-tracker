@@ -50,6 +50,7 @@ class TrackingReporter(BatchMetadataOperator):
             for arm_id, line in lines.items():
                 self.line_calibrations[arm_id] = LineCalibration(line)
         self.lines = lines or {}
+        self.stagnant_threshold_sec = 150.0
         self.crossings: list[dict] = []  # all crossing events
         self.transit_alerts: list[dict] = []  # completed transit alerts
         self.frame_count = 0
@@ -129,6 +130,17 @@ class TrackingReporter(BatchMetadataOperator):
                             self._check_crossings(
                                 track_id, (prev_cx, prev_cy), (cx, cy)
                             )
+
+                        # Stagnant check (any ROI-active track)
+                        if in_roi:
+                            dsm = track_state["dsm"]
+                            traj = track_state["trajectory"].get_full()
+                            if dsm.check_stagnant(traj):
+                                print(
+                                    f"STAGNANT: Track #{track_id} after "
+                                    f"{self.stagnant_threshold_sec}s",
+                                    flush=True,
+                                )
 
                 self.total_detections += frame_detections
 
@@ -219,7 +231,11 @@ class TrackingReporter(BatchMetadataOperator):
             track_state = self.active_tracks.get(track_id)
             if track_state:
                 dsm = track_state["dsm"]
-                alert = dsm.on_crossing(arm_id, cal.line.label, crossing_type)
+                alert = dsm.on_crossing(
+                    arm_id, cal.line.label, crossing_type,
+                    trajectory=track_state["trajectory"].get_full(),
+                    arms=self.lines,
+                )
                 if alert:
                     alert["track_id"] = track_id
                     alert["frame"] = self.frame_count

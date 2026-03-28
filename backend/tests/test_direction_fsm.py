@@ -193,3 +193,56 @@ def test_dsm_not_stagnant_if_moving():
     became_stagnant = dsm.check_stagnant(traj)
     assert became_stagnant is False
     assert dsm.state == TrackState.IN_TRANSIT
+
+
+def test_dsm_stagnant_in_unknown_state():
+    """Vehicle that never crossed entry can still become stagnant."""
+    dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
+    assert dsm.state == TrackState.UNKNOWN
+
+    traj = [(500, 200, i) for i in range(51)]
+    became_stagnant = dsm.check_stagnant(traj)
+    assert became_stagnant is True
+    assert dsm.state == TrackState.STAGNANT
+
+
+def test_dsm_exit_without_entry_same_heading():
+    """Exit in UNKNOWN where heading matches exit arm -> no alert (can't distinguish)."""
+    dsm = DirectionStateMachine()
+
+    # Heading south, exits south -> inferred entry = south = exit -> None
+    traj = [(500, 100 + i * 10, i) for i in range(20)]
+    result = dsm.on_crossing(
+        "south", "South", "exit", trajectory=traj, arms=ARMS,
+    )
+    assert result is None
+
+
+def test_dsm_exit_without_entry_curved_trajectory():
+    """Exit in UNKNOWN with curved trajectory can infer different entry."""
+    dsm = DirectionStateMachine()
+
+    # Start heading east, exit south
+    traj = [(100 + i * 10, 200, i) for i in range(10)]
+    result = dsm.on_crossing(
+        "south", "South", "exit", trajectory=traj, arms=ARMS,
+    )
+    assert result is not None
+    assert result["exit_arm"] == "south"
+    assert result["entry_arm"] == "east"  # heading east at start
+    assert result["method"] == "inferred"
+
+
+def test_dsm_stagnant_resumes_to_unknown():
+    """Stagnant vehicle in UNKNOWN that starts moving goes back to UNKNOWN."""
+    dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
+
+    # Stopped for 5s
+    traj = [(500, 200, i) for i in range(51)]
+    dsm.check_stagnant(traj)
+    assert dsm.state == TrackState.STAGNANT
+
+    # Starts moving
+    moving_traj = [(500 + i * 20, 200, 51 + i) for i in range(51)]
+    dsm.check_stagnant(moving_traj)
+    assert dsm.state == TrackState.UNKNOWN  # back to UNKNOWN, never had entry
