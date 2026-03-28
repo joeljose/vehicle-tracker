@@ -1509,11 +1509,11 @@ git tag v0.2.0    →  version = "0.2.0"
 
 GPU-dependent software cannot be distributed as pip packages or standalone binaries. Docker is the release mechanism.
 
-**Base image:** `nvcr.io/nvidia/deepstream:7.0-triton-multiarch` (includes DeepStream, TensorRT, CUDA, GStreamer).
+**Base image:** `nvcr.io/nvidia/deepstream:8.0-gc-triton-devel` (includes DeepStream, TensorRT, CUDA, GStreamer).
 
 **Dockerfile structure:**
 ```dockerfile
-FROM nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+FROM nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
 
 # System dependencies
 RUN apt-get update && apt-get install -y python3-pip nodejs npm
@@ -1574,7 +1574,7 @@ A development container based on the same DeepStream base image used for product
 # docker-compose.dev.yml
 services:
   backend:
-    image: nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+    image: nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
     runtime: nvidia
     volumes:
       - ./backend:/app/backend

@@ -1,0 +1,32 @@
+services:
+  backend:
+    image: nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
+    runtime: nvidia
+    volumes:
+      - ./backend:/app/backend
+      - ./config:/app/config
+      - ./data_collection:/data
+      - ./snapshots:/app/snapshots
+      - ./experiments:/app/experiments
+      - ./models:/app/models
+    ports:
+      - "8000:8000"
+    working_dir: /app
+    entrypoint: ["bash", "-c"]
+    command: ["pip3 install --quiet --break-system-packages -r backend/requirements.txt && echo 'Dev environment ready.' && tail -f /dev/null"]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+    stdin_open: true
+    tty: true
+
+  frontend:
+    image: node:22-alpine
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    working_dir: /app
+    command: ["sh", "-c", "[ -f package.json ] && npm ci && npm run dev -- --host || echo 'No frontend yet.' && tail -f /dev/null"]
+    profiles:
+      - full
