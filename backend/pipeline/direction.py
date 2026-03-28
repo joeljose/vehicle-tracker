@@ -198,6 +198,8 @@ class DirectionStateMachine:
         self.exit_arm: str | None = None
         self.exit_label: str | None = None
         self.was_stagnant = False
+        self.stopped_since_frame: int | None = None  # frame when vehicle first stopped
+        self._motion_check_window = 30  # frames to check for movement (~1s at 30fps)
 
     def on_crossing(
         self,
@@ -303,27 +305,39 @@ class DirectionStateMachine:
         return None
 
     def check_stagnant(self, trajectory: list[tuple[int, int, int]]) -> bool:
-        """Check if vehicle is stagnant. Returns True on state transition to STAGNANT."""
-        if len(trajectory) < self.stagnant_window_frames:
+        """Check if vehicle is stagnant. Returns True on state transition to STAGNANT.
+
+        Uses a short window to detect if vehicle is currently stopped, then a
+        frame counter to measure how long it's been stopped. This avoids needing
+        the trajectory buffer to hold minutes of data.
+        """
+        if len(trajectory) < self._motion_check_window:
             return False
 
-        oldest = trajectory[-self.stagnant_window_frames]
+        # Check displacement over last ~1 second
+        oldest = trajectory[-self._motion_check_window]
         newest = trajectory[-1]
         displacement = math.sqrt(
             (newest[0] - oldest[0]) ** 2 + (newest[1] - oldest[1]) ** 2
         )
+        current_frame = newest[2]
 
         if displacement < self.motion_threshold_px:
-            if self.state not in (TrackState.WAITING, TrackState.STAGNANT):
-                self._state_before_wait = self.state
-                self.state = TrackState.WAITING
-            if self.state == TrackState.WAITING:
+            # Vehicle is currently stopped
+            if self.stopped_since_frame is None:
+                self.stopped_since_frame = current_frame
+                if self.state not in (TrackState.WAITING, TrackState.STAGNANT):
+                    self._state_before_wait = self.state
+                    self.state = TrackState.WAITING
+
+            stopped_frames = current_frame - self.stopped_since_frame
+            if stopped_frames >= self.stagnant_window_frames and self.state != TrackState.STAGNANT:
                 self.state = TrackState.STAGNANT
                 self.was_stagnant = True
                 return True
-            return False  # already STAGNANT, don't re-trigger
         else:
-            # Moving again — return to previous state
+            # Vehicle is moving
+            self.stopped_since_frame = None
             if self.state in (TrackState.WAITING, TrackState.STAGNANT):
                 prev = getattr(self, "_state_before_wait", TrackState.UNKNOWN)
                 self.state = TrackState.IN_TRANSIT if self.entry_arm else prev

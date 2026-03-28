@@ -155,15 +155,28 @@ def test_dsm_duplicate_entry_ignored():
     assert dsm.entry_arm == "north"  # unchanged
 
 
+def _simulate_stopped(dsm, num_frames, x=500, y=200, start_frame=0):
+    """Helper: simulate a stopped vehicle, calling check_stagnant each frame."""
+    window = dsm._motion_check_window
+    for frame in range(num_frames):
+        f = start_frame + frame
+        start = max(0, f - window + 1)
+        traj = [(x, y, t) for t in range(start, f + 1)]
+        result = dsm.check_stagnant(traj)
+        if result:
+            return f
+    return None
+
+
 def test_dsm_stagnant_detection():
     """Vehicle stopped for stagnant_threshold triggers STAGNANT."""
     dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
+    # stagnant_window = 50 frames, motion_check_window = 30 frames
+    # First detection at frame ~29, stagnant at frame ~79
     dsm.on_crossing("north", "North", "entry")
 
-    # 50 frames of not moving (5s at 10fps)
-    traj = [(500, 200, i) for i in range(51)]
-    became_stagnant = dsm.check_stagnant(traj)
-    assert became_stagnant is True
+    triggered_frame = _simulate_stopped(dsm, 100)
+    assert triggered_frame is not None
     assert dsm.state == TrackState.STAGNANT
     assert dsm.was_stagnant is True
 
@@ -173,8 +186,7 @@ def test_dsm_stagnant_then_exit():
     dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
     dsm.on_crossing("north", "North", "entry")
 
-    traj = [(500, 200, i) for i in range(51)]
-    dsm.check_stagnant(traj)
+    _simulate_stopped(dsm, 100)
     assert dsm.state == TrackState.STAGNANT
 
     result = dsm.on_crossing("south", "South", "exit")
@@ -188,8 +200,7 @@ def test_dsm_not_stagnant_if_moving():
     dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
     dsm.on_crossing("north", "North", "entry")
 
-    # 50 frames of moving
-    traj = [(500 + i * 5, 200, i) for i in range(51)]
+    traj = [(500 + i * 5, 200, i) for i in range(31)]
     became_stagnant = dsm.check_stagnant(traj)
     assert became_stagnant is False
     assert dsm.state == TrackState.IN_TRANSIT
@@ -200,9 +211,8 @@ def test_dsm_stagnant_in_unknown_state():
     dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
     assert dsm.state == TrackState.UNKNOWN
 
-    traj = [(500, 200, i) for i in range(51)]
-    became_stagnant = dsm.check_stagnant(traj)
-    assert became_stagnant is True
+    triggered_frame = _simulate_stopped(dsm, 100)
+    assert triggered_frame is not None
     assert dsm.state == TrackState.STAGNANT
 
 
@@ -237,12 +247,10 @@ def test_dsm_stagnant_resumes_to_unknown():
     """Stagnant vehicle in UNKNOWN that starts moving goes back to UNKNOWN."""
     dsm = DirectionStateMachine(stagnant_threshold_sec=5.0, fps=10.0)
 
-    # Stopped for 5s
-    traj = [(500, 200, i) for i in range(51)]
-    dsm.check_stagnant(traj)
+    _simulate_stopped(dsm, 100)
     assert dsm.state == TrackState.STAGNANT
 
-    # Starts moving
-    moving_traj = [(500 + i * 20, 200, 51 + i) for i in range(51)]
+    # Starts moving — displacement is large
+    moving_traj = [(500 + i * 20, 200, 100 + i) for i in range(31)]
     dsm.check_stagnant(moving_traj)
     assert dsm.state == TrackState.UNKNOWN  # back to UNKNOWN, never had entry
