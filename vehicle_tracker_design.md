@@ -265,13 +265,44 @@ def re_extract_url(original_url: str, preferred_quality: str | None = None) -> s
 - `POST /channel/add` response includes `qualities` list for the frontend to populate a dropdown.
 - `PATCH /channel/{id}/quality` allows the operator to switch quality at runtime (triggers URL re-extraction at the new quality and pipeline source swap).
 
+**yt-dlp invocation for URL resolution:**
+```python
+# Extract stream info (formats, HLS URL, liveness)
+result = subprocess.run(
+    ["yt-dlp", "--dump-json", "--no-download", youtube_url],
+    capture_output=True, text=True, timeout=30
+)
+info = json.loads(result.stdout)
+# info["is_live"] → True if stream is live
+# info["formats"] → list of available formats with "url" fields
+# Filter for HLS formats: format["protocol"] == "m3u8_native"
+
+# Extract direct HLS URL at a specific quality
+result = subprocess.run(
+    ["yt-dlp", "-f", f"bv*[height<={height}]", "--get-url", youtube_url],
+    capture_output=True, text=True, timeout=30
+)
+hls_url = result.stdout.strip()
+```
+
+**Critical yt-dlp flags** (learned from production use in youtube-downloader project):
+- `--no-live-from-start` — Do NOT use `--live-from-start`. Old HLS fragments get purged by YouTube causing 404/500 errors.
+- `--hls-use-mpegts` — Required for HLS stream compatibility.
+- `--wait-for-video 5` — Robustness for streams that haven't fully started.
+- Format selection: `bv*[height<=N]+ba/b[height<=N]` for quality presets, `bv*+ba/b` for best.
+
+**Note:** These flags apply when yt-dlp is used as a downloader. For URL resolution (`--dump-json`, `--get-url`), only the format filter (`-f`) is needed. The HLS URL returned by `--get-url` is fed directly to DeepStream's `nvurisrcbin`, which handles HLS consumption natively.
+
 **Dependencies:**
-- `yt-dlp` installed in the Docker container (added to Dockerfile and requirements).
+- `yt-dlp` binary installed in the Docker container (pinned version in Dockerfile).
+- `deno` runtime installed in the Docker container — **required by yt-dlp for YouTube JavaScript extraction**. Without deno, many streams fail or return limited formats.
+- `ffmpeg` available in the container (already present in the DeepStream base image).
 - Called as a subprocess (`subprocess.run(["yt-dlp", ...])`) — not as a Python library — for isolation and easy version pinning.
 
 **Key constraints:**
 - YouTube HLS URLs expire after ~6 hours. Sessions are expected to be ~1 hour max, so expiry is unlikely but handled via re-extraction.
 - `yt-dlp` is an external tool that requires periodic updates as YouTube changes its API. The version is pinned in the Dockerfile.
+- `deno` is similarly pinned — needed for yt-dlp's YouTube extractor to run JavaScript from YouTube's player.
 - Resolution adds 2-5 seconds latency at channel add time (one-time cost).
 
 ---
@@ -1587,9 +1618,11 @@ GPU-dependent software cannot be distributed as pip packages or standalone binar
 ```dockerfile
 FROM nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
 
-# System dependencies
-RUN apt-get update && apt-get install -y python3-pip nodejs npm \
-    && pip3 install --break-system-packages yt-dlp
+# System dependencies + yt-dlp + deno (required for YouTube JS extraction)
+RUN apt-get update && apt-get install -y python3-pip nodejs npm curl unzip \
+    && pip3 install --break-system-packages yt-dlp \
+    && curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+    && unzip /tmp/deno.zip -d /usr/local/bin && rm /tmp/deno.zip
 
 # Backend
 COPY backend/ /app/backend/
