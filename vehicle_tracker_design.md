@@ -223,13 +223,15 @@ channel_phases: dict[int, ChannelPhase] = {
 
 ### 4.2 DeepStream Phase Routing (Probe Function)
 
-```python
-def analytics_probe(pad, info):
-    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(info.get_buffer()))
-    frame = batch_meta.frame_meta_list
+**Note:** DeepStream 8.0 uses `pyservicemaker` (not the legacy `pyds` API). The `pyservicemaker` module provides `Pipeline`, `Flow`, `Probe`, `BatchMetadataOperator`, `FrameMetadata`, `ObjectMetadata`, etc. The probe pattern below uses the DS 8.0 API — exact method signatures may differ from `pyds` examples found in older DeepStream documentation.
 
-    while frame is not None:
-        frame_meta = pyds.NvDsFrameMeta.cast(frame.data)
+```python
+from pyservicemaker import Probe
+from pyservicemaker._pydeepstream import BatchMetadata, FrameMetadata, ObjectMetadata
+
+def analytics_probe(batch_meta: BatchMetadata):
+    """Probe callback invoked per batch. DS 8.0 pyservicemaker API."""
+    for frame_meta in batch_meta.frame_metadata_list:
         source_id = frame_meta.source_id
         phase = channel_phases.get(source_id, ChannelPhase.SETUP)
 
@@ -237,11 +239,8 @@ def analytics_probe(pad, info):
             process_direction(frame_meta)
             process_best_photo(frame_meta)
             process_alerts(frame_meta)
-        # Phase 1 (SETUP): boxes rendered by nvdsosd, no post-processing
+        # Phase 1 (SETUP): boxes rendered by OSD, no post-processing
         # Phase 3 (REVIEW): source already removed from pipeline
-
-        frame = frame.next
-    return Gst.PadProbeReturn.OK
 ```
 
 ### 4.3 Custom Pipeline Phase Routing
@@ -1393,7 +1392,7 @@ class TrajectoryBuffer:
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Backend language | Python | FastAPI async, GStreamer/DeepStream bindings |
+| Backend language | Python 3.12 | FastAPI async, pyservicemaker (DS 8.0 Python API) |
 | Video decode (DeepStream) | nvv4l2decoder | GStreamer element, hardware NVDEC |
 | Video decode (custom) | NVDEC via Video Codec SDK | Direct hardware decode |
 | Pre-process (DeepStream) | nvvideoconvert + nvinfer | Built-in scaling + normalization |
@@ -1509,11 +1508,11 @@ git tag v0.2.0    →  version = "0.2.0"
 
 GPU-dependent software cannot be distributed as pip packages or standalone binaries. Docker is the release mechanism.
 
-**Base image:** `nvcr.io/nvidia/deepstream:7.0-triton-multiarch` (includes DeepStream, TensorRT, CUDA, GStreamer).
+**Base image:** `nvcr.io/nvidia/deepstream:8.0-gc-triton-devel` (includes DeepStream, TensorRT, CUDA, GStreamer).
 
 **Dockerfile structure:**
 ```dockerfile
-FROM nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+FROM nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
 
 # System dependencies
 RUN apt-get update && apt-get install -y python3-pip nodejs npm
@@ -1574,7 +1573,7 @@ A development container based on the same DeepStream base image used for product
 # docker-compose.dev.yml
 services:
   backend:
-    image: nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+    image: nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
     runtime: nvidia
     volumes:
       - ./backend:/app/backend
