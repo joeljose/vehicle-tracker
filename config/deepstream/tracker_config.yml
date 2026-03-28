@@ -1,0 +1,68 @@
+%YAML:1.0
+# NvDCF tracker config for vehicle tracking.
+# Based on DS 8.0 config_tracker_NvDCF_perf.yml with project-specific overrides:
+#   - maxShadowTrackingAge: 75 (occlusion tolerance ~2.5s at 30fps)
+#   - useUniqueID: 1 (stable 64-bit IDs)
+#   - useHog: 1 + featureImgSizeLevel: 3 (stronger ReID features)
+
+BaseConfig:
+  minDetectorConfidence: 0.0430
+
+TargetManagement:
+  enableBboxUnClipping: 1
+  preserveStreamUpdateOrder: 0
+  maxTargetsPerStream: 150
+
+  # Creation & Termination
+  minIouDiff4NewTarget: 0.7418
+  minTrackerConfidence: 0.4009
+  probationAge: 3
+  maxShadowTrackingAge: 75
+  earlyTerminationAge: 1
+
+TrajectoryManagement:
+  useUniqueID: 1
+
+DataAssociator:
+  dataAssociatorType: 0
+  associationMatcherType: 1
+  checkClassMatch: 1
+
+  # Thresholds
+  minMatchingScore4Overall: 0.4290
+  minMatchingScore4SizeSimilarity: 0.3627
+  minMatchingScore4Iou: 0.2575
+  minMatchingScore4VisualSimilarity: 0.5356
+
+  # Weights
+  matchingScoreWeight4VisualSimilarity: 0.3370
+  matchingScoreWeight4SizeSimilarity: 0.4354
+  matchingScoreWeight4Iou: 0.3656
+
+  # Tentative detections
+  tentativeDetectorConfidence: 0.2008
+  minMatchingScore4TentativeIou: 0.5296
+
+StateEstimator:
+  stateEstimatorType: 1
+
+  # Dynamics
+  processNoiseVar4Loc: 1.5110
+  processNoiseVar4Size: 1.3159
+  processNoiseVar4Vel: 0.0300
+  measurementNoiseVar4Detector: 3.0283
+  measurementNoiseVar4Tracker: 8.1505
+
+VisualTracker:
+  visualTrackerType: 2
+
+  # Feature Extraction
+  useColorNames: 1
+  useHog: 1
+  featureImgSizeLevel: 3
+  featureFocusOffsetFactor_y: -0.2000
+
+  # Correlation Filter
+  filterLr: 0.0750
+  filterChannelWeightsLr: 0.1000
+  gaussianSigma: 0.7500
