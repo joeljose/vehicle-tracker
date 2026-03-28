@@ -1,4 +1,4 @@
-"""Phase 2 tests: NvDCF tracker — persistent vehicle IDs."""
+"""Tracker + trajectory integration tests."""
 
 import os
 import pytest
@@ -114,3 +114,47 @@ def test_shadow_tracking_age():
         config = yaml.safe_load(content)
 
     assert config["TargetManagement"]["maxShadowTrackingAge"] == 75
+
+
+def test_tracks_have_trajectory():
+    """Each track in summary includes trajectory data with frame numbers."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+
+    summary = run_pipeline(str(CLIP_741_73))
+
+    tracks_with_traj = [t for t in summary["tracks"] if t.get("trajectory")]
+    assert len(tracks_with_traj) > 0, "At least one track should have trajectory data"
+
+    for track in tracks_with_traj:
+        traj = track["trajectory"]
+        assert len(traj) > 0
+        # Each entry is (x, y, frame_number)
+        for entry in traj:
+            assert len(entry) == 3
+            x, y, frame = entry
+            assert isinstance(x, int)
+            assert isinstance(y, int)
+            assert isinstance(frame, int)
+            assert frame > 0
+
+
+def test_trajectory_length_matches_lifetime():
+    """Trajectory length should roughly match track lifetime."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+
+    summary = run_pipeline(str(CLIP_LYTLE))
+
+    for track in summary["tracks"]:
+        if track.get("trajectory"):
+            # Trajectory can't be longer than lifetime (1 entry per frame)
+            assert len(track["trajectory"]) <= track["lifetime"]
+
+
+def test_track_loss_logs_trajectory(capsys):
+    """Track loss messages include trajectory data."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+
+    run_pipeline(str(CLIP_741_73))
+
+    captured = capsys.readouterr()
+    assert "trajectory=" in captured.out, "Track loss should log trajectory"

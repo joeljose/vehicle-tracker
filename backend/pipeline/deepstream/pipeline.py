@@ -20,6 +20,7 @@ from backend.pipeline.deepstream.config import (
     TRACKER_LIB,
     load_labels,
 )
+from backend.pipeline.trajectory import TrajectoryBuffer
 
 
 class TrackingReporter(BatchMetadataOperator):
@@ -34,7 +35,7 @@ class TrackingReporter(BatchMetadataOperator):
         self.class_counts: dict[str, int] = {}
         self.start_time: float | None = None
         # Track lifecycle state
-        self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame}
+        self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame, trajectory}
         self.lost_tracks: list[dict] = []
 
     def handle_metadata(self, batch_meta):
@@ -55,11 +56,19 @@ class TrackingReporter(BatchMetadataOperator):
                     track_id = obj_meta.object_id
                     seen_track_ids.add(track_id)
 
+                    # Centroid from bbox
+                    rect = obj_meta.rect_params
+                    cx = int(rect.left + rect.width / 2)
+                    cy = int(rect.top + rect.height / 2)
+
                     if track_id not in self.active_tracks:
+                        traj = TrajectoryBuffer()
+                        traj.append(cx, cy, self.frame_count)
                         self.active_tracks[track_id] = {
                             "label": label,
                             "first_frame": self.frame_count,
                             "last_frame": self.frame_count,
+                            "trajectory": traj,
                         }
                         print(
                             f"New track #{track_id} ({label})",
@@ -67,6 +76,9 @@ class TrackingReporter(BatchMetadataOperator):
                         )
                     else:
                         self.active_tracks[track_id]["last_frame"] = self.frame_count
+                        self.active_tracks[track_id]["trajectory"].append(
+                            cx, cy, self.frame_count
+                        )
 
                 self.total_detections += frame_detections
 
@@ -78,14 +90,17 @@ class TrackingReporter(BatchMetadataOperator):
                 for tid in lost_ids:
                     track = self.active_tracks.pop(tid)
                     lifetime = track["last_frame"] - track["first_frame"] + 1
+                    trajectory = track["trajectory"].get_full()
                     print(
-                        f"Track #{tid} lost after {lifetime} frames",
+                        f"Track #{tid} lost after {lifetime} frames "
+                        f"trajectory={trajectory}",
                         flush=True,
                     )
                     self.lost_tracks.append({
                         "track_id": tid,
                         "label": track["label"],
                         "lifetime": lifetime,
+                        "trajectory": trajectory,
                     })
 
                 if self.frame_count % self.report_interval == 0:
@@ -113,6 +128,7 @@ class TrackingReporter(BatchMetadataOperator):
                 "track_id": tid,
                 "label": track["label"],
                 "lifetime": track["last_frame"] - track["first_frame"] + 1,
+                "trajectory": track["trajectory"].get_full(),
             })
         return {
             "frames": self.frame_count,
