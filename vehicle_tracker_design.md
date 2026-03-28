@@ -1562,7 +1562,90 @@ docker run --gpus all \
 
 ---
 
-## 27. Next Steps (Implementation Order)
+## 27. Development Environment
+
+**All development happens inside containers. Nothing is installed on the host system.**
+
+### Dev Container
+
+A development container based on the same DeepStream base image used for production. Source code is bind-mounted for live editing.
+
+```yaml
+# docker-compose.dev.yml
+services:
+  backend:
+    image: nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+    runtime: nvidia
+    volumes:
+      - ./backend:/app/backend
+      - ./models:/app/models
+      - ./data_collection:/data
+      - ./config:/app/config
+    ports:
+      - "8000:8000"
+    working_dir: /app
+    command: bash -c "pip install -r backend/requirements.txt && python3 backend/main.py --reload"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
+  frontend:
+    image: node:22-alpine
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host"
+```
+
+```bash
+# Start dev environment
+docker compose -f docker-compose.dev.yml up
+
+# Backend: http://localhost:8000
+# Frontend: http://localhost:5173
+```
+
+**Key points:**
+- Backend container has GPU access (`runtime: nvidia`) with DeepStream, TensorRT, CUDA pre-installed
+- Source code is bind-mounted — edit on host, changes reflected immediately
+- Frontend runs in a lightweight Node container
+- `pip install` and `npm ci` run inside the containers, not on the host
+- The `--reload` flag on uvicorn enables hot-reload during development
+- Video files are bind-mounted from `data_collection/` to `/data` inside the container
+
+### Custom Pipeline Dev Container
+
+When implementing the custom pipeline (M9), the DeepStream base image still works since it includes TensorRT and CUDA. Alternatively, a lighter image can be used:
+
+```yaml
+  backend-custom:
+    image: nvcr.io/nvidia/tensorrt:24.01-py3
+    runtime: nvidia
+    volumes:
+      - ./backend:/app/backend
+      - ./models:/app/models
+      - ./data_collection:/data
+    ports:
+      - "8000:8000"
+    working_dir: /app
+    command: bash -c "pip install -r backend/requirements.txt && python3 backend/main.py --backend custom --reload"
+```
+
+### Development Workflow
+
+1. Clone repo
+2. `docker compose -f docker-compose.dev.yml up`
+3. Edit code on host (any editor/IDE)
+4. Backend auto-reloads, frontend hot-reloads
+5. Test in browser at `localhost:5173`
+6. Run tests: `docker compose exec backend pytest`
+7. No `pip install`, `npm install`, or any package manager invocation on the host — ever
+
+---
+
+## 28. Next Steps (Implementation Order)
 
 Milestones are ordered for incremental, demonstrable progress. Each milestone produces a working system with more capability than the last.
 
