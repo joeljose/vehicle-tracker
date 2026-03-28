@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Models
+*.engine
+*.onnx
+*.pt
+*.pth
+*.weights
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (large files)
+data_collection/site_videos/
+*.mp4
+*.mkv
+*.avi
+
+# Snapshots and exports
+snapshots/
+exports/
+
+# Environment
+.env
+.env.local
