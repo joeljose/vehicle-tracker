@@ -20,6 +20,11 @@ from backend.pipeline.deepstream.config import (
     TRACKER_LIB,
     load_labels,
 )
+from backend.pipeline.direction import (
+    LineSeg,
+    LineCalibration,
+    check_line_crossing,
+)
 from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.trajectory import TrajectoryBuffer
 
@@ -31,12 +36,19 @@ class TrackingReporter(BatchMetadataOperator):
         self,
         labels: dict[int, str],
         roi_polygon: list[tuple[float, float]] | None = None,
+        lines: dict[str, LineSeg] | None = None,
         report_interval: int = 100,
     ):
         super().__init__()
         self.labels = labels
         self.roi_polygon = roi_polygon
         self.report_interval = report_interval
+        # Line crossing state
+        self.line_calibrations: dict[str, LineCalibration] = {}
+        if lines:
+            for arm_id, line in lines.items():
+                self.line_calibrations[arm_id] = LineCalibration(line)
+        self.crossings: list[dict] = []  # all crossing events
         self.frame_count = 0
         self.total_detections = 0
         self.class_counts: dict[str, int] = {}
@@ -92,6 +104,10 @@ class TrackingReporter(BatchMetadataOperator):
                         )
                     else:
                         track_state = self.active_tracks[track_id]
+                        # Get previous centroid before appending new one
+                        prev_traj = track_state["trajectory"].get_full()
+                        prev_cx, prev_cy = prev_traj[-1][0], prev_traj[-1][1]
+
                         track_state["last_frame"] = self.frame_count
                         track_state["trajectory"].append(cx, cy, self.frame_count)
                         # Update ROI status (track can move in/out)
@@ -102,6 +118,12 @@ class TrackingReporter(BatchMetadataOperator):
                             print(
                                 f"Track #{track_id}: {roi_tag}",
                                 flush=True,
+                            )
+
+                        # Line crossing check (only for ROI-active tracks)
+                        if in_roi and self.line_calibrations:
+                            self._check_crossings(
+                                track_id, (prev_cx, prev_cy), (cx, cy)
                             )
 
                 self.total_detections += frame_detections
@@ -143,6 +165,36 @@ class TrackingReporter(BatchMetadataOperator):
         except Exception as e:
             print(f"ERROR in TrackingReporter: {e}", flush=True)
 
+    def _check_crossings(
+        self,
+        track_id: int,
+        prev: tuple[float, float],
+        curr: tuple[float, float],
+    ) -> None:
+        """Check if a track crossed any entry/exit line."""
+        for arm_id, cal in self.line_calibrations.items():
+            direction = check_line_crossing(cal.line, prev, curr)
+            if direction is None:
+                continue
+
+            # Feed to calibration
+            cal.observe(direction)
+            if not cal.calibrated:
+                continue
+
+            crossing_type = cal.classify(direction)
+            print(
+                f"Track #{track_id} crossed {cal.line.label} line ({crossing_type})",
+                flush=True,
+            )
+            self.crossings.append({
+                "track_id": track_id,
+                "arm": arm_id,
+                "label": cal.line.label,
+                "type": crossing_type,
+                "frame": self.frame_count,
+            })
+
     def summary(self) -> dict:
         """Return summary stats including tracking info."""
         elapsed = time.time() - self.start_time if self.start_time else 0
@@ -167,6 +219,16 @@ class TrackingReporter(BatchMetadataOperator):
             "elapsed_seconds": elapsed,
             "unique_tracks": len(all_tracks),
             "tracks": all_tracks,
+            "crossings": list(self.crossings),
+            "calibrations": {
+                arm_id: {
+                    "label": cal.line.label,
+                    "calibrated": cal.calibrated,
+                    "entry_sign": cal.entry_sign,
+                    "observations": len(cal.observations),
+                }
+                for arm_id, cal in self.line_calibrations.items()
+            },
         }
 
 
@@ -175,6 +237,7 @@ def build_pipeline(
     output_path: str | None = None,
     interval: int = 0,
     roi_polygon: list[tuple[float, float]] | None = None,
+    lines: dict[str, LineSeg] | None = None,
 ) -> tuple[Pipeline, Flow, TrackingReporter]:
     """Build a DeepStream detection + tracking pipeline.
 
@@ -183,13 +246,14 @@ def build_pipeline(
         output_path: Path for annotated output MP4. None = discard output.
         interval: nvinfer interval (0 = every frame, 1 = every 2nd frame).
         roi_polygon: ROI polygon vertices. Tracks outside are tagged roi_active=False.
+        lines: Entry/exit line segments keyed by arm ID.
 
     Returns:
         (pipeline, flow, reporter) tuple. Call flow() to run.
     """
     file_uri = f"file://{os.path.abspath(video_path)}"
     labels = load_labels()
-    reporter = TrackingReporter(labels, roi_polygon=roi_polygon)
+    reporter = TrackingReporter(labels, roi_polygon=roi_polygon, lines=lines)
 
     pipeline = Pipeline("vehicle-tracker")
     flow = Flow(pipeline, [file_uri])
@@ -232,6 +296,7 @@ def run_pipeline(
     output_path: str | None = None,
     interval: int = 0,
     roi_polygon: list[tuple[float, float]] | None = None,
+    lines: dict[str, LineSeg] | None = None,
 ) -> dict:
     """Run the detection + tracking pipeline to completion and return stats.
 
@@ -240,12 +305,14 @@ def run_pipeline(
         output_path: Path for annotated output MP4. None = discard.
         interval: nvinfer interval.
         roi_polygon: ROI polygon vertices for filtering.
+        lines: Entry/exit line segments keyed by arm ID.
 
     Returns:
         Detection and tracking summary dict.
     """
     pipeline, flow, reporter = build_pipeline(
-        video_path, output_path, interval, roi_polygon=roi_polygon
+        video_path, output_path, interval,
+        roi_polygon=roi_polygon, lines=lines,
     )
 
     print(f"Starting pipeline: {video_path}", flush=True)
