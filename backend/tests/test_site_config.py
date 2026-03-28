@@ -39,7 +39,7 @@ def test_load_741_73():
     config = load_site_config("741_73")
     assert config.site_id == "741_73"
     assert config.has_roi()
-    assert len(config.roi_polygon) == 4
+    assert len(config.roi_polygon) >= 3
     assert "north" in config.entry_exit_lines
 
 

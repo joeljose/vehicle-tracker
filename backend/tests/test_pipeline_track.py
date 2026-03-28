@@ -180,7 +180,7 @@ def test_roi_logs_status(capsys):
     from backend.pipeline.deepstream.pipeline import run_pipeline
     from backend.config.site_config import load_site_config
 
-    config = load_site_config("741_73")
+    config = load_site_config("lytle_south")
     run_pipeline(str(CLIP_LYTLE), roi_polygon=config.roi_polygon)
 
     captured = capsys.readouterr()
@@ -201,27 +201,26 @@ def test_no_roi_defaults_active():
 def test_line_crossing_structure():
     """Pipeline includes crossings and calibrations when lines are configured."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
-    from backend.pipeline.direction import LineSeg
+    from backend.config.site_config import load_site_config
+    from backend.pipeline.direction import load_lines_from_config
 
-    roi = [(0, 0), (1920, 0), (1920, 1080), (0, 1080)]
-    lines = {
-        "mid": LineSeg(label="Mid", start=(0, 120), end=(1920, 120)),
-    }
+    config = load_site_config("lytle_south")
+    lines = load_lines_from_config(config.entry_exit_lines)
 
     summary = run_pipeline(
         str(CLIP_LYTLE),
-        roi_polygon=roi,
+        roi_polygon=config.roi_polygon,
         lines=lines,
     )
 
     assert "crossings" in summary
     assert isinstance(summary["crossings"], list)
     assert "calibrations" in summary
-    assert "mid" in summary["calibrations"]
-    cal = summary["calibrations"]["mid"]
-    assert cal["label"] == "Mid"
-    # Calibration should have observed some crossings (even if not fully calibrated)
-    assert cal["observations"] >= 0
+    assert len(summary["calibrations"]) == 4  # 4 arms for lytle_south
+    for arm_id, cal in summary["calibrations"].items():
+        assert "label" in cal
+        assert "calibrated" in cal
+        assert cal["observations"] >= 0
 
 
 def test_line_crossing_logged(capsys):

@@ -1,0 +1,26 @@
+{
+  "site_id": "lytle_south",
+  "roi_polygon": [[50, 50], [800, 30], [1050, 100], [1850, 370], [1700, 650], [700, 700], [200, 600], [20, 350]],
+  "entry_exit_lines": {
+    "north": {
+      "label": "741-North",
+      "start": [80, 70],
+      "end": [400, 50]
+    },
+    "east": {
+      "label": "East",
+      "start": [900, 50],
+      "end": [1050, 120]
+    },
+    "south": {
+      "label": "741-South",
+      "start": [900, 550],
+      "end": [1700, 550]
+    },
+    "west": {
+      "label": "Lytle-West",
+      "start": [30, 150],
+      "end": [60, 340]
+    }
+  }
+}
