@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vehicle-tracker"
+dynamic = ["version"]
+description = "GPU-accelerated traffic junction monitoring with directional transit alerts"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "Joel Jose", email = "joeljose.k1@gmail.com"},
+]
+
+[tool.setuptools_scm]
+# Version derived from git tags (e.g., v0.1.0)
+# Between tags: 0.1.0.dev3+g1a2b3c4
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"

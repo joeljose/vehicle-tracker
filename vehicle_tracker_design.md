@@ -1482,7 +1482,87 @@ vehicle-tracker/
 
 ---
 
-## 26. Next Steps (Implementation Order)
+## 26. Versioning & Release
+
+### Versioning
+
+SemVer (Major.Minor.Patch). Version is derived from **git tags only** via `setuptools-scm` — no version strings in source files.
+
+```
+git tag v0.1.0    →  version = "0.1.0"
+3 commits later   →  version = "0.1.0.dev3+g1a2b3c4" (auto-generated)
+git tag v0.2.0    →  version = "0.2.0"
+```
+
+**Milestone to version mapping:**
+
+| Milestone | Version | Significance |
+|---|---|---|
+| M1-M2 | 0.1.0 | First working pipeline (DeepStream, single channel, alerts) |
+| M3-M4 | 0.2.0 | API + UI working end-to-end |
+| M5-M6 | 0.3.0 | Full workflow (setup, analytics, review with replay) |
+| M7-M8 | 0.4.0 | Multi-channel + RTSP |
+| M9 | 0.5.0 | Custom pipeline alternative |
+| M10 | 1.0.0 | Production-ready release |
+
+### Release Mechanism: Docker on GitHub Container Registry
+
+GPU-dependent software cannot be distributed as pip packages or standalone binaries. Docker is the release mechanism.
+
+**Base image:** `nvcr.io/nvidia/deepstream:7.0-triton-multiarch` (includes DeepStream, TensorRT, CUDA, GStreamer).
+
+**Dockerfile structure:**
+```dockerfile
+FROM nvcr.io/nvidia/deepstream:7.0-triton-multiarch
+
+# System dependencies
+RUN apt-get update && apt-get install -y python3-pip nodejs npm
+
+# Backend
+COPY backend/ /app/backend/
+RUN pip3 install -r /app/backend/requirements.txt
+
+# Frontend (build step)
+COPY frontend/ /app/frontend/
+RUN cd /app/frontend && npm ci && npm run build
+
+# Models
+COPY models/ /app/models/
+
+WORKDIR /app
+EXPOSE 8000
+CMD ["python3", "backend/main.py"]
+```
+
+**Published to:** `ghcr.io/joeljose/vehicle-tracker`
+
+```bash
+# User runs:
+docker run --gpus all \
+  -p 8000:8000 \
+  -v /path/to/videos:/data \
+  -v /path/to/config:/app/config/sites \
+  ghcr.io/joeljose/vehicle-tracker:0.2.0
+```
+
+**GitHub Release page contains:**
+- Changelog / release notes
+- Link to the Docker image tag
+- `docker-compose.yml` for easy setup
+- Hardware requirements
+
+**Release process:**
+1. `git tag v0.2.0 && git push --tags`
+2. GitHub Actions workflow triggers on tag push
+3. Builds Docker image from the tagged commit
+4. Pushes to `ghcr.io/joeljose/vehicle-tracker:0.2.0` and `:latest`
+5. Creates a GitHub Release with auto-generated notes
+
+**GitHub Container Registry:** Free for public repos. No storage or bandwidth limits.
+
+---
+
+## 27. Next Steps (Implementation Order)
 
 Milestones are ordered for incremental, demonstrable progress. Each milestone produces a working system with more capability than the last.
 
