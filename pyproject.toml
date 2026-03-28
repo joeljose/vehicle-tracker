@@ -18,3 +18,6 @@ authors = [
 # Between tags: 0.1.0.dev3+g1a2b3c4
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
+
+[tool.pytest.ini_options]
+cache_dir = "/home/ds/.cache/pytest"
