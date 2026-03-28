@@ -113,7 +113,7 @@ def test_shadow_tracking_age():
             content = content.split("\n", 1)[1]
         config = yaml.safe_load(content)
 
-    assert config["TargetManagement"]["maxShadowTrackingAge"] == 75
+    assert config["TargetManagement"]["maxShadowTrackingAge"] == 150
 
 
 def test_tracks_have_trajectory():

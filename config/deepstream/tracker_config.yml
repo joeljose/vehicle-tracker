@@ -17,7 +17,7 @@ TargetManagement:
   minIouDiff4NewTarget: 0.7418
   minTrackerConfidence: 0.4009
   probationAge: 3
-  maxShadowTrackingAge: 75
+  maxShadowTrackingAge: 150
   earlyTerminationAge: 1
 
 TrajectoryManagement:

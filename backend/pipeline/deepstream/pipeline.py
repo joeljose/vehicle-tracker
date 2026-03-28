@@ -323,8 +323,6 @@ def build_pipeline(
         "gpu-id": 0,
         "ll-lib-file": TRACKER_LIB,
         "ll-config-file": TRACKER_CONFIG,
-        "enable-past-frame": 1,
-        "enable-batch-process": 1,
     })
     pipeline.link(infer_element_name, "tracker")
 
