@@ -1,0 +1,26 @@
+{
+  "site_id": "741_73",
+  "roi_polygon": [[300, 200], [1600, 200], [1800, 900], [100, 900]],
+  "entry_exit_lines": {
+    "north": {
+      "label": "741-North",
+      "start": [500, 220],
+      "end": [1400, 220]
+    },
+    "south": {
+      "label": "741-South",
+      "start": [500, 880],
+      "end": [1400, 880]
+    },
+    "east": {
+      "label": "73-East",
+      "start": [1580, 300],
+      "end": [1580, 800]
+    },
+    "west": {
+      "label": "73-West",
+      "start": [320, 300],
+      "end": [320, 800]
+    }
+  }
+}

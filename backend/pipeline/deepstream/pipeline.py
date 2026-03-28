@@ -20,15 +20,22 @@ from backend.pipeline.deepstream.config import (
     TRACKER_LIB,
     load_labels,
 )
+from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.trajectory import TrajectoryBuffer
 
 
 class TrackingReporter(BatchMetadataOperator):
     """Probe callback that logs per-frame detection and tracking stats."""
 
-    def __init__(self, labels: dict[int, str], report_interval: int = 100):
+    def __init__(
+        self,
+        labels: dict[int, str],
+        roi_polygon: list[tuple[float, float]] | None = None,
+        report_interval: int = 100,
+    ):
         super().__init__()
         self.labels = labels
+        self.roi_polygon = roi_polygon
         self.report_interval = report_interval
         self.frame_count = 0
         self.total_detections = 0
@@ -61,6 +68,13 @@ class TrackingReporter(BatchMetadataOperator):
                     cx = int(rect.left + rect.width / 2)
                     cy = int(rect.top + rect.height / 2)
 
+                    # ROI check
+                    in_roi = (
+                        point_in_polygon((cx, cy), self.roi_polygon)
+                        if self.roi_polygon
+                        else True
+                    )
+
                     if track_id not in self.active_tracks:
                         traj = TrajectoryBuffer()
                         traj.append(cx, cy, self.frame_count)
@@ -69,16 +83,26 @@ class TrackingReporter(BatchMetadataOperator):
                             "first_frame": self.frame_count,
                             "last_frame": self.frame_count,
                             "trajectory": traj,
+                            "roi_active": in_roi,
                         }
+                        roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
                         print(
-                            f"New track #{track_id} ({label})",
+                            f"New track #{track_id} ({label}): {roi_tag}",
                             flush=True,
                         )
                     else:
-                        self.active_tracks[track_id]["last_frame"] = self.frame_count
-                        self.active_tracks[track_id]["trajectory"].append(
-                            cx, cy, self.frame_count
-                        )
+                        track_state = self.active_tracks[track_id]
+                        track_state["last_frame"] = self.frame_count
+                        track_state["trajectory"].append(cx, cy, self.frame_count)
+                        # Update ROI status (track can move in/out)
+                        was_in_roi = track_state["roi_active"]
+                        track_state["roi_active"] = in_roi
+                        if in_roi != was_in_roi:
+                            roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
+                            print(
+                                f"Track #{track_id}: {roi_tag}",
+                                flush=True,
+                            )
 
                 self.total_detections += frame_detections
 
@@ -101,6 +125,7 @@ class TrackingReporter(BatchMetadataOperator):
                         "label": track["label"],
                         "lifetime": lifetime,
                         "trajectory": trajectory,
+                        "roi_active": track["roi_active"],
                     })
 
                 if self.frame_count % self.report_interval == 0:
@@ -129,6 +154,7 @@ class TrackingReporter(BatchMetadataOperator):
                 "label": track["label"],
                 "lifetime": track["last_frame"] - track["first_frame"] + 1,
                 "trajectory": track["trajectory"].get_full(),
+                "roi_active": track["roi_active"],
             })
         return {
             "frames": self.frame_count,
@@ -148,6 +174,7 @@ def build_pipeline(
     video_path: str,
     output_path: str | None = None,
     interval: int = 0,
+    roi_polygon: list[tuple[float, float]] | None = None,
 ) -> tuple[Pipeline, Flow, TrackingReporter]:
     """Build a DeepStream detection + tracking pipeline.
 
@@ -155,13 +182,14 @@ def build_pipeline(
         video_path: Path to the input video file.
         output_path: Path for annotated output MP4. None = discard output.
         interval: nvinfer interval (0 = every frame, 1 = every 2nd frame).
+        roi_polygon: ROI polygon vertices. Tracks outside are tagged roi_active=False.
 
     Returns:
         (pipeline, flow, reporter) tuple. Call flow() to run.
     """
     file_uri = f"file://{os.path.abspath(video_path)}"
     labels = load_labels()
-    reporter = TrackingReporter(labels)
+    reporter = TrackingReporter(labels, roi_polygon=roi_polygon)
 
     pipeline = Pipeline("vehicle-tracker")
     flow = Flow(pipeline, [file_uri])
@@ -203,6 +231,7 @@ def run_pipeline(
     video_path: str,
     output_path: str | None = None,
     interval: int = 0,
+    roi_polygon: list[tuple[float, float]] | None = None,
 ) -> dict:
     """Run the detection + tracking pipeline to completion and return stats.
 
@@ -210,11 +239,14 @@ def run_pipeline(
         video_path: Path to the input video file.
         output_path: Path for annotated output MP4. None = discard.
         interval: nvinfer interval.
+        roi_polygon: ROI polygon vertices for filtering.
 
     Returns:
         Detection and tracking summary dict.
     """
-    pipeline, flow, reporter = build_pipeline(video_path, output_path, interval)
+    pipeline, flow, reporter = build_pipeline(
+        video_path, output_path, interval, roi_polygon=roi_polygon
+    )
 
     print(f"Starting pipeline: {video_path}", flush=True)
     print(f"  interval={interval}", flush=True)

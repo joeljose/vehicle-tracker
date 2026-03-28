@@ -158,3 +158,41 @@ def test_track_loss_logs_trajectory(capsys):
 
     captured = capsys.readouterr()
     assert "trajectory=" in captured.out, "Track loss should log trajectory"
+
+
+def test_roi_filtering():
+    """Tracks are tagged with roi_active when ROI polygon is provided."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+    from backend.config.site_config import load_site_config
+
+    config = load_site_config("741_73")
+    summary = run_pipeline(str(CLIP_741_73), roi_polygon=config.roi_polygon)
+
+    assert summary["unique_tracks"] > 0
+    # Every track should have roi_active field
+    for track in summary["tracks"]:
+        assert "roi_active" in track
+        assert isinstance(track["roi_active"], bool)
+
+
+def test_roi_logs_status(capsys):
+    """Console logs IN ROI / OUT OF ROI for tracks."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+    from backend.config.site_config import load_site_config
+
+    config = load_site_config("741_73")
+    run_pipeline(str(CLIP_LYTLE), roi_polygon=config.roi_polygon)
+
+    captured = capsys.readouterr()
+    # At least some tracks should be tagged
+    assert "ROI" in captured.out
+
+
+def test_no_roi_defaults_active():
+    """Without ROI polygon, all tracks are roi_active=True."""
+    from backend.pipeline.deepstream.pipeline import run_pipeline
+
+    summary = run_pipeline(str(CLIP_741_73))
+
+    for track in summary["tracks"]:
+        assert track["roi_active"] is True
