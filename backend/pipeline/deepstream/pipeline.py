@@ -23,6 +23,7 @@ from backend.pipeline.deepstream.config import (
 from backend.pipeline.direction import (
     LineSeg,
     LineCalibration,
+    DirectionStateMachine,
     check_line_crossing,
 )
 from backend.pipeline.roi import point_in_polygon
@@ -48,13 +49,15 @@ class TrackingReporter(BatchMetadataOperator):
         if lines:
             for arm_id, line in lines.items():
                 self.line_calibrations[arm_id] = LineCalibration(line)
+        self.lines = lines or {}
         self.crossings: list[dict] = []  # all crossing events
+        self.transit_alerts: list[dict] = []  # completed transit alerts
         self.frame_count = 0
         self.total_detections = 0
         self.class_counts: dict[str, int] = {}
         self.start_time: float | None = None
         # Track lifecycle state
-        self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame, trajectory}
+        self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame, trajectory, dsm}
         self.lost_tracks: list[dict] = []
 
     def handle_metadata(self, batch_meta):
@@ -96,6 +99,7 @@ class TrackingReporter(BatchMetadataOperator):
                             "last_frame": self.frame_count,
                             "trajectory": traj,
                             "roi_active": in_roi,
+                            "dsm": DirectionStateMachine(),
                         }
                         roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
                         print(
@@ -138,16 +142,32 @@ class TrackingReporter(BatchMetadataOperator):
                     lifetime = track["last_frame"] - track["first_frame"] + 1
                     trajectory = track["trajectory"].get_full()
                     print(
-                        f"Track #{tid} lost after {lifetime} frames "
-                        f"trajectory={trajectory}",
+                        f"Track #{tid} lost after {lifetime} frames",
                         flush=True,
                     )
+
+                    # Try to infer direction on track loss
+                    dsm = track["dsm"]
+                    if track["roi_active"] and self.lines:
+                        alert = dsm.on_track_lost(trajectory, self.lines)
+                        if alert:
+                            alert["track_id"] = tid
+                            alert["frame"] = self.frame_count
+                            self.transit_alerts.append(alert)
+                            print(
+                                f"TRANSIT: Track #{tid}: "
+                                f"{alert['entry_label']} -> {alert['exit_label']} "
+                                f"({alert['method']})",
+                                flush=True,
+                            )
+
                     self.lost_tracks.append({
                         "track_id": tid,
                         "label": track["label"],
                         "lifetime": lifetime,
                         "trajectory": trajectory,
                         "roi_active": track["roi_active"],
+                        "direction_state": dsm.state.value,
                     })
 
                 if self.frame_count % self.report_interval == 0:
@@ -195,6 +215,22 @@ class TrackingReporter(BatchMetadataOperator):
                 "frame": self.frame_count,
             })
 
+            # Feed to direction state machine
+            track_state = self.active_tracks.get(track_id)
+            if track_state:
+                dsm = track_state["dsm"]
+                alert = dsm.on_crossing(arm_id, cal.line.label, crossing_type)
+                if alert:
+                    alert["track_id"] = track_id
+                    alert["frame"] = self.frame_count
+                    self.transit_alerts.append(alert)
+                    print(
+                        f"TRANSIT: Track #{track_id}: "
+                        f"{alert['entry_label']} -> {alert['exit_label']} "
+                        f"({alert['method']})",
+                        flush=True,
+                    )
+
     def summary(self) -> dict:
         """Return summary stats including tracking info."""
         elapsed = time.time() - self.start_time if self.start_time else 0
@@ -207,6 +243,7 @@ class TrackingReporter(BatchMetadataOperator):
                 "lifetime": track["last_frame"] - track["first_frame"] + 1,
                 "trajectory": track["trajectory"].get_full(),
                 "roi_active": track["roi_active"],
+                "direction_state": track["dsm"].state.value,
             })
         return {
             "frames": self.frame_count,
@@ -220,6 +257,7 @@ class TrackingReporter(BatchMetadataOperator):
             "unique_tracks": len(all_tracks),
             "tracks": all_tracks,
             "crossings": list(self.crossings),
+            "transit_alerts": list(self.transit_alerts),
             "calibrations": {
                 arm_id: {
                     "label": cal.line.label,

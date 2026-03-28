@@ -1,6 +1,8 @@
-"""Line-crossing detection and auto-calibration."""
+"""Line-crossing detection, auto-calibration, and direction state machine."""
 
+import math
 from dataclasses import dataclass, field
+from enum import Enum
 
 
 @dataclass
@@ -112,3 +114,187 @@ def load_lines_from_config(entry_exit_lines: dict) -> dict[str, LineSeg]:
             end=tuple(line_data["end"]),
         )
     return lines
+
+
+# --- Direction state machine ---
+
+
+class TrackState(Enum):
+    UNKNOWN = "unknown"
+    IN_TRANSIT = "in_transit"
+    WAITING = "waiting"
+    STAGNANT = "stagnant"
+
+
+def nearest_arm(
+    trajectory: list[tuple[int, int, int]],
+    arms: dict[str, LineSeg],
+    use_start: bool,
+) -> str | None:
+    """Infer direction from trajectory heading via dot product against arm vectors.
+
+    Args:
+        trajectory: List of (x, y, frame) entries.
+        arms: Arm ID -> LineSeg mapping.
+        use_start: True = use first centroids (infer entry), False = use last (infer exit).
+
+    Returns:
+        Best-matching arm ID, or None if trajectory is too short.
+    """
+    if len(trajectory) < 4:
+        return None
+
+    n = min(10, len(trajectory) // 2)
+    if n < 2:
+        return None
+
+    segment = trajectory[:n] if use_start else trajectory[-n:]
+
+    heading = (segment[-1][0] - segment[0][0], segment[-1][1] - segment[0][1])
+    heading_mag = math.sqrt(heading[0] ** 2 + heading[1] ** 2)
+    if heading_mag < 1e-6:
+        return None
+    hx, hy = heading[0] / heading_mag, heading[1] / heading_mag
+
+    best_arm = None
+    best_dot = -float("inf")
+    for arm_id, line in arms.items():
+        dx = line.end[0] - line.start[0]
+        dy = line.end[1] - line.start[1]
+        mag = math.sqrt(dx ** 2 + dy ** 2)
+        if mag < 1e-6:
+            continue
+        dot = hx * (dx / mag) + hy * (dy / mag)
+        if dot > best_dot:
+            best_dot = dot
+            best_arm = arm_id
+
+    return best_arm
+
+
+class DirectionStateMachine:
+    """Per-track state machine: UNKNOWN -> IN_TRANSIT -> EXITED -> alert.
+
+    Args:
+        stagnant_threshold_sec: Time stopped before STAGNANT alert (default 150s).
+        motion_threshold_px: Displacement below this = stopped (default 15px).
+        fps: Source FPS for time-to-frame conversion.
+    """
+
+    def __init__(
+        self,
+        stagnant_threshold_sec: float = 150.0,
+        motion_threshold_px: float = 15.0,
+        fps: float = 30.0,
+    ):
+        self.stagnant_threshold_sec = stagnant_threshold_sec
+        self.motion_threshold_px = motion_threshold_px
+        self.fps = fps
+        self.stagnant_window_frames = int(stagnant_threshold_sec * fps)
+
+        self.state = TrackState.UNKNOWN
+        self.entry_arm: str | None = None
+        self.entry_label: str | None = None
+        self.exit_arm: str | None = None
+        self.exit_label: str | None = None
+        self.was_stagnant = False
+
+    def on_crossing(self, arm_id: str, label: str, crossing_type: str) -> dict | None:
+        """Handle a line crossing event.
+
+        Args:
+            arm_id: Which arm was crossed (e.g. "north").
+            label: Human label (e.g. "741-North").
+            crossing_type: "entry" or "exit".
+
+        Returns:
+            A transit alert dict if this crossing completes a transit, else None.
+        """
+        if crossing_type == "entry" and self.state == TrackState.UNKNOWN:
+            self.entry_arm = arm_id
+            self.entry_label = label
+            self.state = TrackState.IN_TRANSIT
+            return None
+
+        if crossing_type == "exit" and self.state in (
+            TrackState.IN_TRANSIT,
+            TrackState.WAITING,
+            TrackState.STAGNANT,
+        ):
+            self.exit_arm = arm_id
+            self.exit_label = label
+            return {
+                "entry_arm": self.entry_arm,
+                "entry_label": self.entry_label,
+                "exit_arm": self.exit_arm,
+                "exit_label": self.exit_label,
+                "method": "confirmed",
+                "was_stagnant": self.was_stagnant,
+            }
+
+        return None
+
+    def on_track_lost(
+        self,
+        trajectory: list[tuple[int, int, int]],
+        arms: dict[str, LineSeg],
+    ) -> dict | None:
+        """Handle track loss — infer missing direction if possible.
+
+        Returns:
+            A transit alert dict if direction can be inferred, else None.
+        """
+        if self.state == TrackState.UNKNOWN:
+            # Never crossed any line — try to infer both entry and exit
+            entry = nearest_arm(trajectory, arms, use_start=True)
+            exit_ = nearest_arm(trajectory, arms, use_start=False)
+            if entry and exit_ and entry != exit_:
+                return {
+                    "entry_arm": entry,
+                    "entry_label": arms[entry].label,
+                    "exit_arm": exit_,
+                    "exit_label": arms[exit_].label,
+                    "method": "inferred",
+                    "was_stagnant": self.was_stagnant,
+                }
+
+        elif self.state in (TrackState.IN_TRANSIT, TrackState.WAITING, TrackState.STAGNANT):
+            # Had entry but no exit — infer exit
+            exit_ = nearest_arm(trajectory, arms, use_start=False)
+            if exit_ and exit_ != self.entry_arm:
+                return {
+                    "entry_arm": self.entry_arm,
+                    "entry_label": self.entry_label,
+                    "exit_arm": exit_,
+                    "exit_label": arms[exit_].label,
+                    "method": "inferred",
+                    "was_stagnant": self.was_stagnant,
+                }
+
+        return None
+
+    def check_stagnant(self, trajectory: list[tuple[int, int, int]]) -> bool:
+        """Check if vehicle is stagnant. Returns True on state transition to STAGNANT."""
+        if self.state not in (TrackState.IN_TRANSIT, TrackState.WAITING):
+            return False
+
+        if len(trajectory) < self.stagnant_window_frames:
+            return False
+
+        oldest = trajectory[-self.stagnant_window_frames]
+        newest = trajectory[-1]
+        displacement = math.sqrt(
+            (newest[0] - oldest[0]) ** 2 + (newest[1] - oldest[1]) ** 2
+        )
+
+        if displacement < self.motion_threshold_px:
+            if self.state != TrackState.STAGNANT:
+                self.state = TrackState.STAGNANT
+                self.was_stagnant = True
+                return True
+        else:
+            # Moving again
+            if self.state in (TrackState.WAITING, TrackState.STAGNANT):
+                self.state = TrackState.IN_TRANSIT
+
+        return False
