@@ -1,0 +1,17 @@
+property:
+  gpu-id: 0
+  net-scale-factor: 0.00392156862745098
+  onnx-file: /opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx
+  model-engine-file: /app/models/trafficcamnet_fp16.engine
+  labelfile-path: /app/config/deepstream/labels.txt
+  batch-size: 1
+  network-mode: 2
+  num-detected-classes: 4
+  interval: 0
+  gie-unique-id: 1
+  cluster-mode: 2
+
+class-attrs-all:
+  pre-cluster-threshold: 0.3
+  topk: 20
+  nms-iou-threshold: 0.5
