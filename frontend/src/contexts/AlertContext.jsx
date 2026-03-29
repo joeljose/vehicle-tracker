@@ -9,10 +9,20 @@ const initialState = {
 
 function alertReducer(state, action) {
   switch (action.type) {
-    case "SET_ALERTS":
-      return { ...state, alerts: action.alerts };
-    case "ADD_ALERT":
+    case "SET_ALERTS": {
+      // Backfill: merge with existing alerts, dedup by alert_id
+      const existingIds = new Set(state.alerts.map((a) => a.alert_id));
+      const newAlerts = action.alerts.filter((a) => !existingIds.has(a.alert_id));
+      // Existing (from WS) go first (newest), then backfilled
+      return { ...state, alerts: [...state.alerts, ...newAlerts] };
+    }
+    case "ADD_ALERT": {
+      // Skip duplicate (WS might re-deliver)
+      if (state.alerts.some((a) => a.alert_id === action.alert.alert_id)) {
+        return state;
+      }
       return { ...state, alerts: [action.alert, ...state.alerts] };
+    }
     case "SET_FILTER":
       return { ...state, filter: action.filter };
     default:
