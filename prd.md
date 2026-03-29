@@ -71,21 +71,23 @@ Someone who uses the UI to monitor live feeds, review alerts, and replay vehicle
 Each channel independently progresses through four phases. Multiple channels can be in different phases simultaneously.
 
 ### Phase 1 -- Setup
-- Operator adds a video source (file path or YouTube Live URL). Video plays immediately (loops for recorded files).
-- Detection and tracking run as a live preview -- bounding boxes with track IDs are drawn on the video. This provides visual feedback for configuration.
+- Operator adds a video source (file path or YouTube Live URL). A **preview pipeline** starts immediately: decode → detect → track → OSD overlay → MJPEG stream to browser. Recorded files loop continuously.
+- Detection and tracking run as a live preview -- bounding boxes with track IDs are drawn on the video. This provides visual feedback for configuration. Pipeline runs at real-time speed (sync=True) so the operator sees video at normal pace.
+- MJPEG frames delivered to the browser at ~15fps (every other inference frame encoded to JPEG via BufferOperator + cv2.imencode). Inference runs at 30fps.
 - Operator draws a broad ROI polygon and entry/exit lines on the video using canvas drawing tools. Operator labels each arm (defaults: N/E/S/W, editable to road names like "741-North").
 - No alerts, direction detection, or best-photo capture occur in this phase.
 - Site configuration (ROI, lines, labels) can be saved to disk and reloaded for the same junction. Saved configs are a convenience for persistence — they are never auto-loaded by the pipeline.
 
 ### Phase 2 -- Analytics
 - Operator clicks "Start Analytics". The frontend sends the currently drawn ROI polygon and entry/exit lines as part of the phase transition request. The pipeline always uses the operator's current drawing — never a saved site config.
-- For recorded video: playback restarts from frame 0 and plays once. For YouTube Live: analytics starts from the current moment.
+- The preview pipeline from Setup is stopped. A new **analytics pipeline** starts: same detection + tracking + OSD + MJPEG, plus ROI filtering, direction detection (line crossing), best-photo capture, vehicle state classification, and alert generation.
+- For recorded video: playback starts from frame 0 and plays once (no loop). For YouTube Live: analytics starts from the current moment. Pipeline runs at real-time speed (sync=True).
 - Tracker is reset (fresh instance created for the channel) to avoid stale tracks from Phase 1.
-- Full pipeline runs: detection, tracking, direction detection (line crossing), best-photo capture, vehicle state classification, and alert generation.
-- Transit alerts and stagnant alerts appear in the alert feed sidebar in real time.
+- Transit alerts and stagnant alerts appear in the alert feed sidebar in real time. Alert delivery within 500ms (NF-05).
+- Stagnant alerts fire when a vehicle's centroid displacement stays below threshold for 150 seconds. TrackingReporter constructs and emits the stagnant alert dict.
 
 ### Phase 3 -- Review
-- Triggered by: recorded video reaching end-of-file, YouTube Live stream ending or dropping, or operator clicking "Stop".
+- Triggered by: recorded video reaching end-of-file (EOS auto-transition), YouTube Live stream ending or dropping, or operator clicking "Stop".
 - Alert feed remains visible and interactive. No new alerts are generated.
 - **Recorded video:** Click an alert to jump to that timestamp in the video. Video replays the segment with stored per-frame bounding box and trajectory overlays drawn on a canvas layer. Native `<video>` controls available.
 - **YouTube Live (no recording):** Click an alert to see stored bounding boxes animated on a frozen last frame, replaying the vehicle's trajectory at original timing.

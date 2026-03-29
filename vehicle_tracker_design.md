@@ -369,10 +369,29 @@ for channel_id, detections in batch_results.items():
 ### 4.4 Phase Transition Mechanics
 
 - Phase transitions are requested from the API thread (e.g., `POST /channel/{id}/phase`).
-- Requests are queued in a thread-safe queue.
-- The pipeline thread drains the queue **between frame batches**, under a mutex, ensuring no mid-frame state corruption.
-- **Phase 1 to 2 transition:** The frontend sends the operator's currently drawn ROI polygon and entry/exit lines with the phase transition request. The backend calls `configure_channel()` with these coordinates, then `set_channel_phase()` to start analytics. The pipeline builds with these exact coordinates — saved site configs are never auto-loaded. Creates a fresh tracker instance for that channel (clears all existing track IDs). For DeepStream, this means resetting the tracker's per-source state. For recorded video, playback resets to frame 0 and plays once (no loop).
-- **Phase 2 to 3 transition:** For recorded video, triggered automatically at video end or manually by the operator. For YouTube Live, triggered by stream end/drop (after recovery attempts fail) or operator click "Stop". The source is removed from the pipeline (DeepStream: runtime source delete via `nvstreammux`).
+- Each channel has two pipeline instances across its lifecycle:
+  1. **Preview pipeline (Setup):** decode → infer → track → OSD → MJPEG. No ROI, no alerts. Video loops. sync=True.
+  2. **Analytics pipeline (Analytics):** same + ROI filtering + direction detection + alerts + best-photo. Video plays once. sync=True.
+- `pipeline.start()` is non-blocking (pyservicemaker spawns its own GLib MainLoop thread). Probe callbacks fire on the GStreamer streaming thread and bridge to the FastAPI asyncio event loop via `asyncio.loop.call_soon_threadsafe()`.
+- **Phase 1 (Setup):** Preview pipeline starts at `add_channel()`. Operator sees live detections at real-time pace while drawing ROI/lines.
+- **Phase 1 to 2 transition:** Preview pipeline stopped. The frontend sends the operator's currently drawn ROI polygon and entry/exit lines with the phase transition request. The backend calls `configure_channel()` with these coordinates, then `set_channel_phase()`. Analytics pipeline starts with ROI/lines, fresh tracker, playback from frame 0 (no loop).
+- **Phase 2 to 3 transition:** For recorded video, triggered automatically at EOS via pipeline `on_message` callback. For YouTube Live, triggered by stream end/drop (after recovery attempts fail) or operator click "Stop". Analytics pipeline stopped.
+- **Phase 3 to 4 transition:** Removes the channel entirely. All in-memory data (alerts, snapshots, replay data) is cleared.
+
+### 4.5 Threading Architecture
+
+```
+Main Thread:  asyncio event loop (uvicorn/FastAPI)
+                 ↑ call_soon_threadsafe()
+                 |
+GStreamer Thread 1:  pipeline.start() → channel 0 probes
+GStreamer Thread 2:  pipeline.start() → channel 1 probes
+```
+
+- GStreamer probe callbacks (BatchMetadataOperator, BufferOperator) run on the streaming thread.
+- Callbacks push FrameResult / alerts to the asyncio thread via `call_soon_threadsafe()`.
+- AlertStore requires `threading.Lock` for cross-thread writes.
+- MJPEG frames: BufferOperator after nvdsosd → cupy.asnumpy() → cv2.imencode('.jpg') at ~15fps (skip every other frame).
 - **Phase 3 to 4 transition:** Removes the channel entirely. All in-memory data (alerts, snapshots, replay data) is cleared.
 
 ```python
