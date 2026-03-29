@@ -243,32 +243,40 @@ Each channel independently progresses through four phases. Multiple channels can
 
 ### 8.12 UI -- Core
 
+**Layout:** Phase-driven UI. The main content area adapts to the current phase (Setup / Analytics / Review). Video panel and alert feed are always side-by-side (required for Review replay). Phase indicator at the top serves as navigation.
+
+**Design:** Dark mode default (monitoring dashboard standard). shadcn/ui + Tailwind CSS component library. Color scheme: background `#0f1117`, cards `#1a1d23`, transit=blue `#60a5fa`, stagnant=amber `#fbbf24`, active=green `#4ade80`, error=red `#f87171`.
+
+**Best-photo thumbnails:** Always square (long_side × long_side). Vehicle occupies ≥50% of visible area. Scene expansion for context, black padding for edge cases and remaining gap.
+
 | ID | Requirement | Priority |
 |---|---|---|
 | F-75 | Control panel allows adding and removing source channels (YouTube Live URL or file path) | Must |
 | F-76 | Control panel allows starting and stopping the pipeline | Must |
 | F-77 | Control panel exposes a confidence threshold slider that updates the backend in real time | Must |
-| F-78 | Phase indicator displayed per channel showing current phase (Setup / Analytics / Review) | Must |
+| F-78 | Phase indicator displayed per channel showing current phase (Setup / Analytics / Review). Acts as top-level navigation -- UI content adapts to current phase. | Must |
 | F-79 | Start/Stop Analytics button per channel for phase transitions | Must |
 | F-80 | UI renders one video panel per active channel dynamically -- no hardcoded panel count | Must |
-| F-81 | Video panel renders MJPEG via `<img>` tag during Phase 1 and Phase 2 | Must |
-| F-82 | Video panel renders `<video>` element with `<canvas>` overlay for Phase 3 replay (recorded video) | Must |
-| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for Phase 3 replay (YouTube Live) | Must |
-| F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Phase 1 | Must |
-| F-85 | Stats bar shows fps, active track count, and inference latency per channel | Must |
+| F-81 | Video panel renders MJPEG via `<img>` tag during Setup and Analytics phases | Must |
+| F-82 | Video panel renders `<video>` element with `<canvas>` overlay for Review phase (recorded video) | Must |
+| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for Review phase (YouTube Live) | Must |
+| F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Setup phase | Must |
+| F-85 | Stats bar below video shows fps, active track count, and inference latency per channel (Analytics phase) | Must |
 | F-86 | UI connects to the backend WebSocket on load and reconnects automatically on drop | Must |
+| F-100 | Alert feed only shows completed events (transit alerts, stagnant alerts) -- not raw detections or active tracks. Active tracking is visible in the video panel. | Must |
 
 ### 8.13 UI -- Alert Feed
 
 | ID | Requirement | Priority |
 |---|---|---|
 | F-87 | Alert feed displayed as a persistent right sidebar, approximately 300 px wide | Must |
-| F-88 | Compact alert cards showing: thumbnail (best photo), direction arrow, track ID, timestamp | Must |
-| F-89 | Stagnant alerts visually distinguished with orange/yellow highlight | Must |
+| F-88 | Compact alert cards showing: square thumbnail (best photo), direction labels, track ID, duration, method, relative timestamp. Minimal format — feed must be scannable at high alert rates. | Must |
+| F-89 | Stagnant alerts visually distinguished with amber/yellow highlight (transit = blue, stagnant = amber) | Must |
 | F-90 | Filter buttons at top of feed: All, Transit, Stagnant | Must |
-| F-91 | Click a compact card to expand it (accordion style) showing: full metadata, trajectory minimap on a junction snapshot, download best photo button | Must |
-| F-92 | Click an alert during Phase 3 (recorded): video panel jumps to that timestamp and replays segment with stored bounding box overlay via `requestVideoFrameCallback()` | Must |
-| F-93 | Click an alert during Phase 3 (YouTube Live): animated bounding box replays on frozen last frame at original timing | Must |
+| F-91 | Alert cards are read-only during Analytics phase (no click interaction). Clickable only during Review phase (after analytics stops or video ends). | Must |
+| F-92 | Click an alert during Review (recorded): video panel jumps to that timestamp and replays segment with stored bounding box overlay via `requestVideoFrameCallback()` | Must |
+| F-93 | Click an alert during Review (YouTube Live): animated bounding box replays on frozen last frame at original timing | Must |
+| F-99 | Alert feed auto-scrolls to newest when user is at the top. If user has scrolled down, stop auto-scrolling and show a "↑ New alerts" badge to jump back. | Must |
 
 ### 8.14 UI -- Widgets (v1 Scope)
 
