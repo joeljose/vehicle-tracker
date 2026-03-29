@@ -488,16 +488,14 @@ duration_ms, frames_stationary
 
 | Milestone | Deliverable | Dependencies |
 |---|---|---|
-| M1 -- DeepStream single-channel | Single-channel file input with DeepStream: decode, TrafficCamNet detection, NvDCF tracking, ROI polygon filtering, entry/exit line-crossing detection | None |
-| M2 -- Direction + alerts | Direction state machine, stagnant detection, best-photo capture, alert generation -- all implemented as DeepStream probe functions | M1 |
-| M3 -- API layer | FastAPI server with all REST + WebSocket + MJPEG endpoints. Pipeline-agnostic API boundary. Pipeline controllable from curl. | M2 |
-| M4 -- React shell | Control panel, video panels (MJPEG), alert feed sidebar, stats bar, phase controls, WebSocket integration | M3 |
-| M5 -- Drawing tools + site config | ROI polygon and entry/exit line drawing UI on canvas overlay. Site config save/load (JSON). Label editing. | M4 |
-| M6 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for YouTube Live. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M5 |
-| M7 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M6 |
-| M8 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M7 |
-| M9 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M3 |
-| M10 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M8 |
+| M1 -- DeepStream single-channel | Single-channel file input with full DeepStream pipeline: decode, TrafficCamNet detection, NvDCF tracking, ROI polygon filtering, entry/exit line-crossing, direction state machine, stagnant detection, best-photo capture, proximity-based track stitching, idle optimization. All implemented as GStreamer pad probe functions. Structured logging. 153 tests. **COMPLETE.** | None |
+| M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. | M1 |
+| M3 -- React UI | Control panel, video panels (MJPEG), alert feed sidebar, stats bar, phase controls, WebSocket integration, ROI polygon and entry/exit line drawing tools on canvas overlay, site config save/load. | M2 |
+| M4 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for YouTube Live. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M3 |
+| M5 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M4 |
+| M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M5 |
+| M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
+| M8 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M6 |
 
 ---
 

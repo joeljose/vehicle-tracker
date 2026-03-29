@@ -55,9 +55,9 @@ Two pipeline implementations exist — DeepStream (primary) and custom (secondar
 ### 3.1 DeepStream Pipeline
 
 ```
-Sources ---> nvstreammux ---> nvinfer ---> nvtracker(NvDCF) ---> nvdsanalytics ---> [PROBE] ---> nvdsosd ---> sinks
-                                                                                      |
-                                                                          Phase routing:
+Sources ---> nvstreammux ---> nvinfer ---> nvtracker(NvDCF) ---> [PROBE] ---> nvvideoconvert ---> capsfilter(RGB) ---> [BUFFER PROBE] ---> sinks
+                                                                    |                                                    |
+                                                        Phase routing:                                         Best-photo extraction:
                                                                           source_id -> channel_state dict
                                                                           Phase 1: render boxes only
                                                                           Phase 2: alerts, photos, direction
@@ -67,8 +67,7 @@ Sources ---> nvstreammux ---> nvinfer ---> nvtracker(NvDCF) ---> nvdsanalytics -
 - `nvstreammux` batches frames from all active channels into a single batch tensor.
 - `nvinfer` runs TrafficCamNet (or YOLOv8s) on the batch — one inference call serves all channels.
 - `nvtracker` runs NvDCF with ReID features for robust tracking.
-- `nvdsanalytics` handles line-crossing primitive detection.
-- The **pad probe** function after `nvdsanalytics` is the phase routing point. It inspects `frame_meta.source_id`, looks up the channel's current phase in a shared state dict, and conditionally runs post-processing (direction logic, alert generation, best-photo scoring).
+- The **pad probe** function after `nvtracker` is the phase routing point. It inspects `frame_meta.source_id`, looks up the channel's current phase, and runs post-processing: direction detection (cross-product line-crossing), alert generation, best-photo scoring, track stitching, and idle optimization. Line-crossing uses custom Python (direction.py), not `nvdsanalytics`.
 - `nvdsosd` draws bounding boxes, IDs, and trajectory overlays onto the frame.
 - Sinks encode to MJPEG for HTTP streaming.
 
@@ -729,7 +728,7 @@ enable-batch-process=1
 NvDCF:
   useUniqueID: 1
   maxTargetsPerStream: 50
-  maxShadowTrackingAge: 75    # 60-90 frames; keeps "shadow" tracks for occluded vehicles
+  maxShadowTrackingAge: 150   # ~5s at 30fps; keeps "shadow" tracks for stopped/occluded vehicles
   probationAge: 3
   earlyTerminationAge: 1
   minIouDiff4NewTarget: 0.7
@@ -1505,7 +1504,7 @@ class TrajectoryBuffer:
 | Detection (custom) | YOLOv8s -> TensorRT INT8 | Ultralytics export |
 | Tracking (DeepStream) | NvDCF (nvtracker) | GPU, ReID features |
 | Tracking (custom) | ByteTrack | CPU, Kalman + IoU |
-| Line analytics (DeepStream) | nvdsanalytics + custom probe | Line-crossing primitives |
+| Line analytics (DeepStream) | Custom Python probe (direction.py) | Cross-product line-crossing algorithm |
 | Line analytics (custom) | Custom Python (direction.py) | Cross-product algorithm |
 | Annotation (DeepStream) | nvdsosd | GStreamer element, GPU rendering |
 | Annotation (custom) | CUDA draw kernel | Boxes + IDs + trails on GPU frame |
@@ -1757,13 +1756,11 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 
 | Milestone | Description | Key Deliverables |
 |---|---|---|
-| **M1** | DeepStream pipeline — single-channel file input | Detection + NvDCF tracking + ROI polygon + line-crossing primitives working end-to-end |
-| **M2** | Direction state machine + alerts | Direction state machine, stagnant detection, best-photo capture via probe functions |
-| **M3** | FastAPI API layer | All REST endpoints, WebSocket broadcaster, MJPEG streaming — pipeline-agnostic API boundary |
-| **M4** | React shell | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls |
-| **M5** | ROI + line drawing UI | Canvas-based ROI polygon + entry/exit line drawing tools, site config persistence |
-| **M6** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for YouTube Live, per-alert replay data |
-| **M7** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
-| **M8** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic |
-| **M9** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
-| **M10** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |
+| **M1** | DeepStream pipeline — single-channel file input | Detection + NvDCF tracking + ROI + line-crossing + direction FSM + stagnant detection + best-photo capture + track stitching + idle optimization. 153 tests. **COMPLETE.** |
+| **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. |
+| **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load. |
+| **M4** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for YouTube Live, per-alert replay data |
+| **M5** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
+| **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic |
+| **M7** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
+| **M8** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |
