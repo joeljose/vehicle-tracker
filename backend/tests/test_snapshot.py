@@ -179,15 +179,15 @@ class TestSave:
         bpt.save(track_id=1, output_dir=str(out))
         assert (out / "1.jpg").exists()
 
-    def test_save_logs_message(self, tmp_path, capsys):
+    def test_save_logs_message(self, tmp_path, caplog):
         bpt = BestPhotoTracker()
         bpt.score(track_id=5, area=2000, confidence=0.75, bbox=(10, 10, 40, 50))
         bpt.extract_crops(_make_gradient_frame(1080, 1920))
-        bpt.save(track_id=5, output_dir=str(tmp_path))
-        captured = capsys.readouterr()
-        assert "Track #5" in captured.out
-        assert "best photo saved" in captured.out
-        assert "40x50" in captured.out
+        with caplog.at_level("INFO"):
+            bpt.save(track_id=5, output_dir=str(tmp_path))
+        assert "Track #5" in caplog.text
+        assert "best photo saved" in caplog.text
+        assert "40x50" in caplog.text
 
 
 # --- Helpers ---

@@ -77,11 +77,11 @@ def test_best_photos_saved(site_id, clip_path):
 
 
 @pytest.mark.parametrize("site_id,clip_path", JUNCTIONS, ids=[j[0] for j in JUNCTIONS])
-def test_roi_filtering_active(site_id, clip_path, capsys):
+def test_roi_filtering_active(site_id, clip_path, caplog):
     """ROI filtering tags tracks as IN/OUT of ROI."""
-    _run_junction(site_id, clip_path)
-    captured = capsys.readouterr()
-    assert "ROI" in captured.out, f"No ROI tagging logged for {site_id}"
+    with caplog.at_level("DEBUG"):
+        _run_junction(site_id, clip_path)
+    assert "ROI" in caplog.text, f"No ROI tagging logged for {site_id}"
 
 
 @pytest.mark.parametrize("site_id,clip_path", JUNCTIONS, ids=[j[0] for j in JUNCTIONS])
@@ -102,7 +102,7 @@ def test_track_stitching_runs(site_id, clip_path):
     print(f"  {site_id}: {summary['merges']} merges")
 
 
-def test_summary_report(capsys):
+def test_summary_report():
     """Print a structured summary report across all junctions."""
     results = []
     for site_id, clip_path in JUNCTIONS:
@@ -130,7 +130,6 @@ def test_summary_report(capsys):
         })
 
     # Print report
-    capsys.readouterr()  # clear pipeline output
     print("\n" + "=" * 70)
     print("M1 INTEGRATION REPORT")
     print("=" * 70)

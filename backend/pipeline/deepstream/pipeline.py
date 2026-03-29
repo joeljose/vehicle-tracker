@@ -11,6 +11,7 @@ Builds a GStreamer pipeline via pyservicemaker that:
 """
 
 from pyservicemaker import Pipeline, Flow, Probe, BatchMetadataOperator, BufferOperator
+import logging
 import os
 import time
 
@@ -31,6 +32,8 @@ from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stitch import TrackStitcher
 from backend.pipeline.trajectory import TrajectoryBuffer
+
+logger = logging.getLogger(__name__)
 
 
 class TrackingReporter(BatchMetadataOperator):
@@ -118,11 +121,10 @@ class TrackingReporter(BatchMetadataOperator):
                             lost_tid = match["lost_track_id"]
                             self.merge_count += 1
                             gap_sec = match["gap_frames"] / 30.0
-                            print(
-                                f"Track #{track_id} merged with lost track "
-                                f"#{lost_tid} (dist={match['distance']:.0f}px, "
-                                f"gap={gap_sec:.1f}s)",
-                                flush=True,
+                            logger.info(
+                                "Track #%d merged with lost track "
+                                "#%d (dist=%dpx, gap=%.1fs)",
+                                track_id, lost_tid, match["distance"], gap_sec,
                             )
                         else:
                             traj = TrajectoryBuffer()
@@ -139,9 +141,9 @@ class TrackingReporter(BatchMetadataOperator):
                         }
                         if not match:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
-                            print(
-                                f"New track #{track_id} ({label}): {roi_tag}",
-                                flush=True,
+                            logger.info(
+                                "New track #%d (%s): %s",
+                                track_id, label, roi_tag,
                             )
                     else:
                         track_state = self.active_tracks[track_id]
@@ -156,9 +158,8 @@ class TrackingReporter(BatchMetadataOperator):
                         track_state["roi_active"] = in_roi
                         if in_roi != was_in_roi:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
-                            print(
-                                f"Track #{track_id}: {roi_tag}",
-                                flush=True,
+                            logger.debug(
+                                "Track #%d: %s", track_id, roi_tag,
                             )
 
                         # Line crossing check (only for ROI-active tracks)
@@ -172,10 +173,9 @@ class TrackingReporter(BatchMetadataOperator):
                             dsm = track_state["dsm"]
                             traj = track_state["trajectory"].get_full()
                             if dsm.check_stagnant(traj):
-                                print(
-                                    f"STAGNANT: Track #{track_id} after "
-                                    f"{self.stagnant_threshold_sec}s",
-                                    flush=True,
+                                logger.warning(
+                                    "STAGNANT: Track #%d after %ds",
+                                    track_id, self.stagnant_threshold_sec,
                                 )
 
                     # Best-photo scoring (ROI-active tracks only)
@@ -202,10 +202,7 @@ class TrackingReporter(BatchMetadataOperator):
                 for tid in lost_ids:
                     track = self.active_tracks.pop(tid)
                     lifetime = track["last_frame"] - track["first_frame"] + 1
-                    print(
-                        f"Track #{tid} lost after {lifetime} frames",
-                        flush=True,
-                    )
+                    logger.info("Track #%d lost after %d frames", tid, lifetime)
 
                     if track["roi_active"]:
                         # Buffer for stitching — defer direction inference
@@ -240,25 +237,19 @@ class TrackingReporter(BatchMetadataOperator):
                     new_interval = self.idle_optimizer.recommended_interval
                     self.infer_node.set({"interval": new_interval})
                     mode = "IDLE" if transition == "idle" else "ACTIVE"
-                    print(
-                        f"{mode} MODE: interval={new_interval}",
-                        flush=True,
-                    )
+                    logger.info("%s MODE: interval=%d", mode, new_interval)
 
                 if self.frame_count % self.report_interval == 0:
                     elapsed = time.time() - self.start_time
                     fps = self.frame_count / elapsed if elapsed > 0 else 0
                     avg_det = self.total_detections / self.frame_count
-                    print(
-                        f"[Frame {self.frame_count}] "
-                        f"detections={frame_detections} "
-                        f"tracks={len(self.active_tracks)} "
-                        f"avg={avg_det:.1f}/frame "
-                        f"fps={fps:.1f}",
-                        flush=True,
+                    logger.debug(
+                        "[Frame %d] detections=%d tracks=%d avg=%.1f/frame fps=%.1f",
+                        self.frame_count, frame_detections,
+                        len(self.active_tracks), avg_det, fps,
                     )
         except Exception as e:
-            print(f"ERROR in TrackingReporter: {e}", flush=True)
+            logger.error("TrackingReporter: %s", e)
 
     def _finalize_lost_track(self, tid: int, stitcher_state: dict) -> None:
         """Handle a track that expired from the stitcher (no merge found).
@@ -283,11 +274,10 @@ class TrackingReporter(BatchMetadataOperator):
                 alert["track_id"] = tid
                 alert["frame"] = self.frame_count
                 self.transit_alerts.append(alert)
-                print(
-                    f"TRANSIT: Track #{tid}: "
-                    f"{alert['entry_label']} -> {alert['exit_label']} "
-                    f"({alert['method']})",
-                    flush=True,
+                logger.info(
+                    "TRANSIT: Track #%d: %s -> %s (%s)",
+                    tid, alert["entry_label"], alert["exit_label"],
+                    alert["method"],
                 )
 
         self.lost_tracks.append({
@@ -317,9 +307,9 @@ class TrackingReporter(BatchMetadataOperator):
                 continue
 
             crossing_type = cal.classify(direction)
-            print(
-                f"Track #{track_id} crossed {cal.line.label} line ({crossing_type})",
-                flush=True,
+            logger.info(
+                "Track #%d crossed %s line (%s)",
+                track_id, cal.line.label, crossing_type,
             )
             self.crossings.append({
                 "track_id": track_id,
@@ -342,11 +332,10 @@ class TrackingReporter(BatchMetadataOperator):
                     alert["track_id"] = track_id
                     alert["frame"] = self.frame_count
                     self.transit_alerts.append(alert)
-                    print(
-                        f"TRANSIT: Track #{track_id}: "
-                        f"{alert['entry_label']} -> {alert['exit_label']} "
-                        f"({alert['method']})",
-                        flush=True,
+                    logger.info(
+                        "TRANSIT: Track #%d: %s -> %s (%s)",
+                        track_id, alert["entry_label"],
+                        alert["exit_label"], alert["method"],
                     )
 
     def summary(self) -> dict:
@@ -416,7 +405,7 @@ class FrameExtractor(BufferOperator):
 
             return True
         except Exception as e:
-            print(f"ERROR in FrameExtractor: {e}", flush=True)
+            logger.error("FrameExtractor: %s", e)
             return True
 
 
@@ -537,10 +526,10 @@ def run_pipeline(
         snapshot_dir=snapshot_dir,
     )
 
-    print(f"Starting pipeline: {video_path}", flush=True)
-    print(f"  interval={interval}", flush=True)
+    logger.info("Starting pipeline: %s", video_path)
+    logger.info("  interval=%d", interval)
     if output_path:
-        print(f"  output={output_path}", flush=True)
+        logger.info("  output=%s", output_path)
 
     flow()
 
@@ -555,12 +544,10 @@ def run_pipeline(
             reporter.best_photo.save(tid, reporter.snapshot_dir)
 
     summary = reporter.summary()
-    print(
-        f"\nPipeline complete: {summary['frames']} frames, "
-        f"{summary['total_detections']} detections, "
-        f"{summary['unique_tracks']} unique tracks, "
-        f"{summary['merges']} merges, "
-        f"{summary['fps']:.1f} fps",
-        flush=True,
+    logger.info(
+        "Pipeline complete: %d frames, %d detections, %d unique tracks, "
+        "%d merges, %.1f fps",
+        summary["frames"], summary["total_detections"],
+        summary["unique_tracks"], summary["merges"], summary["fps"],
     )
     return summary

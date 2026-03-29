@@ -16,15 +16,15 @@ def test_pipeline_has_merge_count():
     assert isinstance(summary["merges"], int)
 
 
-def test_stitcher_merges_logged(capsys):
+def test_stitcher_merges_logged(caplog):
     """Pipeline logs merge events (or none if no ID switches occur)."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
-    summary = run_pipeline(str(CLIP_LYTLE))
-    captured = capsys.readouterr()
+    with caplog.at_level("INFO"):
+        summary = run_pipeline(str(CLIP_LYTLE))
 
     if summary["merges"] > 0:
-        assert "merged with lost track" in captured.out
+        assert "merged with lost track" in caplog.text
     # Merges depend on footage — even zero merges is valid if no ID switches
 
 

@@ -53,14 +53,14 @@ def test_track_ids_stable():
     )
 
 
-def test_track_lifecycle_logged(capsys):
-    """Console logs 'New track' and 'Track lost' messages."""
+def test_track_lifecycle_logged(caplog):
+    """Logs 'New track' and 'Track lost' messages."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
-    run_pipeline(str(CLIP_741_73))
+    with caplog.at_level("INFO"):
+        run_pipeline(str(CLIP_741_73))
 
-    captured = capsys.readouterr()
-    assert "New track #" in captured.out, "Should log new track creation"
+    assert "New track #" in caplog.text, "Should log new track creation"
 
 
 def test_track_count_in_summary():
@@ -156,14 +156,14 @@ def test_trajectory_length_matches_lifetime():
             assert len(track["trajectory"]) > 0
 
 
-def test_track_loss_logged(capsys):
+def test_track_loss_logged(caplog):
     """Track loss messages are logged."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
-    run_pipeline(str(CLIP_741_73))
+    with caplog.at_level("INFO"):
+        run_pipeline(str(CLIP_741_73))
 
-    captured = capsys.readouterr()
-    assert "lost after" in captured.out, "Track loss should be logged"
+    assert "lost after" in caplog.text, "Track loss should be logged"
 
 
 def test_roi_filtering():
@@ -181,17 +181,16 @@ def test_roi_filtering():
         assert isinstance(track["roi_active"], bool)
 
 
-def test_roi_logs_status(capsys):
-    """Console logs IN ROI / OUT OF ROI for tracks."""
+def test_roi_logs_status(caplog):
+    """Logs IN ROI / OUT OF ROI for tracks."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
     from backend.config.site_config import load_site_config
 
     config = load_site_config("lytle_south")
-    run_pipeline(str(CLIP_LYTLE), roi_polygon=config.roi_polygon)
+    with caplog.at_level("DEBUG"):
+        run_pipeline(str(CLIP_LYTLE), roi_polygon=config.roi_polygon)
 
-    captured = capsys.readouterr()
-    # At least some tracks should be tagged
-    assert "ROI" in captured.out
+    assert "ROI" in caplog.text
 
 
 def test_no_roi_defaults_active():
@@ -229,8 +228,8 @@ def test_line_crossing_structure():
         assert cal["observations"] >= 0
 
 
-def test_line_crossing_logged(capsys):
-    """Console logs line crossing events."""
+def test_line_crossing_logged(caplog):
+    """Logs line crossing events."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
     from backend.config.site_config import load_site_config
     from backend.pipeline.direction import load_lines_from_config
@@ -239,16 +238,16 @@ def test_line_crossing_logged(capsys):
     lines = load_lines_from_config(config.entry_exit_lines)
 
     # Use 741_73 clip with 741_73 config (ROI matches this camera)
-    run_pipeline(
+    with caplog.at_level("INFO"):
+        run_pipeline(
         str(CLIP_741_73),
         roi_polygon=config.roi_polygon,
         lines=lines,
     )
 
-    captured = capsys.readouterr()
     # Should have crossing events or at least calibration observations
     # (741_73 10s clip may be sparse — just verify no errors)
-    assert "ERROR" not in captured.out
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
 
 
 def test_no_lines_no_crossings():

@@ -59,11 +59,11 @@ def test_snapshots_are_valid_images():
         print(f"  {jpeg.name}: {w}x{h}")
 
 
-def test_snapshot_logs_printed(capsys):
-    """Pipeline prints 'best photo saved' log messages."""
+def test_snapshot_logs_printed(caplog):
+    """Pipeline logs 'best photo saved' messages."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
-    run_pipeline(str(CLIP_LYTLE), snapshot_dir=str(SNAPSHOT_DIR))
+    with caplog.at_level("INFO"):
+        run_pipeline(str(CLIP_LYTLE), snapshot_dir=str(SNAPSHOT_DIR))
 
-    captured = capsys.readouterr()
-    assert "best photo saved" in captured.out, "Should log best-photo saves"
+    assert "best photo saved" in caplog.text, "Should log best-photo saves"

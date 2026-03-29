@@ -1,9 +1,12 @@
 """Best-photo capture — score, crop, and save the best frame per tracked vehicle."""
 
+import logging
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class BestPhotoTracker:
@@ -122,10 +125,9 @@ class BestPhotoTracker:
         bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
         cv2.imwrite(str(jpeg_path), bgr)
 
-        print(
-            f"Track #{track_id}: best photo saved "
-            f"(score={score:.0f}, {w}x{h} crop)",
-            flush=True,
+        logger.info(
+            "Track #%d: best photo saved (score=%d, %dx%d crop)",
+            track_id, score, w, h,
         )
 
         # Clean up
