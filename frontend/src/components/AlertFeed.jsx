@@ -4,6 +4,7 @@ import { useAlerts } from "../contexts/AlertContext";
 import { snapshotUrl } from "../api/rest";
 
 const CARD_HEIGHT = 76; // px per alert card
+const EXPANDED_HEIGHT = 340; // px for expanded card with detail
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "transit_alert", label: "Transit" },
@@ -22,34 +23,40 @@ function formatRelativeTime(timestamp) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function AlertCard({ alert }) {
+function AlertCard({ alert, isReview, isSelected, onSelect }) {
   const isTransit = alert.type === "transit_alert";
   const dotColor = isTransit ? "bg-transit-blue" : "bg-stagnant-amber";
   const textColor = isTransit ? "text-transit-blue" : "text-stagnant-amber";
+  const borderColor = isTransit ? "border-l-transit-blue" : "border-l-stagnant-amber";
+  const bgColor = isTransit ? "bg-transit-blue/5" : "bg-stagnant-amber/5";
 
   let directionLabel = "Stagnant";
   if (isTransit) {
     const entry = alert.entry_arm || alert.entry_label || "?";
     const exit = alert.exit_arm || alert.exit_label || "?";
-    // Use short arm names (first letter uppercase)
     const e = entry.charAt(0).toUpperCase();
     const x = exit.charAt(0).toUpperCase();
     directionLabel = `${e} \u21A3 ${x}`;
   }
 
-  const label = alert.label || "vehicle";
+  const label = alert.label || alert.class || "vehicle";
   const trackId = alert.track_id ?? "?";
   const duration = alert.duration_frames
     ? `${(alert.duration_frames / 30).toFixed(1)}s`
     : isTransit
-      ? ""
+      ? alert.duration_ms ? `${(alert.duration_ms / 1000).toFixed(1)}s` : ""
       : alert.stationary_duration_frames
         ? `${(alert.stationary_duration_frames / 30).toFixed(0)}s`
-        : "";
+        : alert.stationary_duration_ms ? `${(alert.stationary_duration_ms / 1000).toFixed(0)}s` : "";
   const method = alert.method || "";
 
   return (
-    <div className="px-3 py-2.5 border-b border-border/50 cursor-default">
+    <div
+      className={`px-3 py-2.5 border-b border-border/50 ${
+        isSelected ? `${bgColor} border-l-2 ${borderColor}` : ""
+      } ${isReview ? "cursor-pointer hover:bg-background/50 transition-colors" : "cursor-default"}`}
+      onClick={() => isReview && onSelect?.(alert)}
+    >
       <div className="flex gap-3">
         {/* Thumbnail */}
         <div className="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
@@ -71,7 +78,7 @@ function AlertCard({ alert }) {
             <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
             <span className={`text-xs font-medium ${textColor}`}>{directionLabel}</span>
             <span className="text-[10px] text-text-muted ml-auto">
-              {formatRelativeTime(alert.timestamp)}
+              {formatRelativeTime(alert.timestamp || alert.timestamp_ms)}
             </span>
           </div>
           <div className="text-xs text-text-secondary truncate">
@@ -87,12 +94,103 @@ function AlertCard({ alert }) {
   );
 }
 
-export default function AlertFeed({ alertCount }) {
+function AlertDetail({ alert }) {
+  const isTransit = alert.type === "transit_alert";
+
+  return (
+    <div className="px-3 pb-3 space-y-3">
+      {/* Best photo */}
+      <div className="w-full aspect-video rounded-lg bg-background overflow-hidden">
+        {alert.track_id != null ? (
+          <img
+            src={snapshotUrl(alert.track_id)}
+            alt="Best photo"
+            className="w-full h-full object-cover"
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
+        ) : (
+          <div className="w-full h-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
+            <span className="text-text-muted text-xs">No photo</span>
+          </div>
+        )}
+      </div>
+
+      {/* Metadata grid */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+        <div>
+          <span className="text-text-muted">Track ID</span>
+          <p className="text-text-primary">#{alert.track_id ?? "?"}</p>
+        </div>
+        <div>
+          <span className="text-text-muted">Class</span>
+          <p className="text-text-primary">{alert.class || alert.label || "unknown"}</p>
+        </div>
+        {isTransit ? (
+          <>
+            <div>
+              <span className="text-text-muted">Direction</span>
+              <p className="text-text-primary">
+                {alert.entry_direction || alert.entry_arm || "?"} → {alert.exit_direction || alert.exit_arm || "?"}
+              </p>
+            </div>
+            <div>
+              <span className="text-text-muted">Duration</span>
+              <p className="text-text-primary">
+                {alert.duration_ms ? `${(alert.duration_ms / 1000).toFixed(1)}s` : "—"}
+              </p>
+            </div>
+            <div>
+              <span className="text-text-muted">Method</span>
+              <p className="text-text-primary">{alert.method || "—"}</p>
+            </div>
+            <div>
+              <span className="text-text-muted">Confidence</span>
+              <p className="text-text-primary">
+                {alert.avg_confidence != null ? alert.avg_confidence.toFixed(2) : "—"}
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <span className="text-text-muted">Duration</span>
+              <p className="text-text-primary">
+                {alert.stationary_duration_ms
+                  ? `${Math.floor(alert.stationary_duration_ms / 1000)}s`
+                  : "—"}
+              </p>
+            </div>
+            <div>
+              <span className="text-text-muted">Position</span>
+              <p className="text-text-primary">
+                {alert.position ? `(${alert.position[0]}, ${alert.position[1]})` : "—"}
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Download button */}
+      {alert.track_id != null && (
+        <a
+          href={snapshotUrl(alert.track_id)}
+          download={`track_${alert.track_id}.jpg`}
+          className="block w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors text-center"
+        >
+          Download Photo
+        </a>
+      )}
+    </div>
+  );
+}
+
+export default function AlertFeed({ phase, selectedAlertId, onSelectAlert }) {
   const { state, dispatch } = useAlerts();
   const parentRef = useRef(null);
   const [newCount, setNewCount] = useState(0);
   const [atTop, setAtTop] = useState(true);
   const prevLenRef = useRef(state.alerts.length);
+  const isReview = phase === "review";
 
   // Filtered alerts
   const filtered = useMemo(() => {
@@ -104,9 +202,20 @@ export default function AlertFeed({ alertCount }) {
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => CARD_HEIGHT,
+    estimateSize: (index) => {
+      const alert = filtered[index];
+      if (isReview && alert && alert.alert_id === selectedAlertId) {
+        return CARD_HEIGHT + EXPANDED_HEIGHT;
+      }
+      return CARD_HEIGHT;
+    },
     overscan: 10,
   });
+
+  // Re-measure when selection changes
+  useEffect(() => {
+    virtualizer.measure();
+  }, [selectedAlertId, virtualizer]);
 
   // Track if user is at top of scroll
   const handleScroll = useCallback(() => {
@@ -125,7 +234,6 @@ export default function AlertFeed({ alertCount }) {
 
     if (len > prevLen) {
       if (atTop) {
-        // Already at top — scroll stays at top (prepend)
         setNewCount(0);
       } else {
         setNewCount((c) => c + (len - prevLen));
@@ -183,7 +291,9 @@ export default function AlertFeed({ alertCount }) {
       >
         {filtered.length === 0 ? (
           <div className="flex items-center justify-center h-full">
-            <p className="text-text-muted text-xs">Waiting for alerts...</p>
+            <p className="text-text-muted text-xs">
+              {isReview ? "No alerts to review" : "Waiting for alerts..."}
+            </p>
           </div>
         ) : (
           <div
@@ -195,6 +305,7 @@ export default function AlertFeed({ alertCount }) {
           >
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const alert = filtered[virtualRow.index];
+              const isSelected = isReview && alert.alert_id === selectedAlertId;
               return (
                 <div
                   key={alert.alert_id || virtualRow.index}
@@ -207,7 +318,13 @@ export default function AlertFeed({ alertCount }) {
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
-                  <AlertCard alert={alert} />
+                  <AlertCard
+                    alert={alert}
+                    isReview={isReview}
+                    isSelected={isSelected}
+                    onSelect={onSelectAlert}
+                  />
+                  {isSelected && <AlertDetail alert={alert} />}
                 </div>
               );
             })}

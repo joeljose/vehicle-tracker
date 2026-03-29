@@ -6,6 +6,7 @@ import { useToast } from "../components/Toast";
 import AlertFeed from "../components/AlertFeed";
 import DrawingCanvas from "../components/DrawingCanvas";
 import DrawingTools from "../components/DrawingTools";
+import ReplayView from "../components/ReplayView";
 import StatsBar from "../components/StatsBar";
 import { getChannel, getAlerts, setChannelPhase, updateConfig } from "../api/rest";
 import { createWs } from "../api/ws";
@@ -103,6 +104,9 @@ function ChannelContent() {
   const [error, setError] = useState(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [phaseLoading, setPhaseLoading] = useState(false);
+
+  // Review state
+  const [selectedAlert, setSelectedAlert] = useState(null);
 
   // Drawing state
   const [tool, setTool] = useState(null);
@@ -349,15 +353,19 @@ function ChannelContent() {
 
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
-        {/* Video Panel */}
+        {/* Video / Replay Panel */}
         <div className="flex-1 flex flex-col min-w-0">
-          <VideoPanel
-            channelId={channelId}
-            pipelineStarted={pipelineStarted}
-            phase={phase}
-            imgRef={imgRef}
-            drawingProps={drawingProps}
-          />
+          {phase === "review" ? (
+            <ReplayView alert={selectedAlert} />
+          ) : (
+            <VideoPanel
+              channelId={channelId}
+              pipelineStarted={pipelineStarted}
+              phase={phase}
+              imgRef={imgRef}
+              drawingProps={drawingProps}
+            />
+          )}
           <StatsBar />
         </div>
 
@@ -381,7 +389,11 @@ function ChannelContent() {
             loading={phaseLoading}
           />
         ) : (
-          <AlertFeed />
+          <AlertFeed
+            phase={phase}
+            selectedAlertId={selectedAlert?.alert_id}
+            onSelectAlert={setSelectedAlert}
+          />
         )}
       </div>
     </div>
