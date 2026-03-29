@@ -1,6 +1,5 @@
 """Tests for M3 Phase 6: Replay backend — clip extraction + replay endpoint."""
 
-import time
 from pathlib import Path
 from unittest.mock import patch
 
