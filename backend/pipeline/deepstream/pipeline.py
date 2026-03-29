@@ -26,6 +26,7 @@ from backend.pipeline.direction import (
     DirectionStateMachine,
     check_line_crossing,
 )
+from backend.pipeline.idle import IdleOptimizer
 from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stitch import TrackStitcher
@@ -70,6 +71,9 @@ class TrackingReporter(BatchMetadataOperator):
         # Track stitching
         self.stitcher = TrackStitcher()
         self.merge_count = 0
+        # Idle optimization
+        self.idle_optimizer = IdleOptimizer()
+        self.infer_node = None  # set by build_pipeline after construction
 
     def handle_metadata(self, batch_meta):
         try:
@@ -226,6 +230,20 @@ class TrackingReporter(BatchMetadataOperator):
                             "roi_active": False,
                             "direction_state": track["dsm"].state.value,
                         })
+
+                # Idle optimization
+                transition = self.idle_optimizer.update(
+                    num_detections=frame_detections,
+                    num_active_tracks=len(self.active_tracks),
+                )
+                if transition and self.infer_node is not None:
+                    new_interval = self.idle_optimizer.recommended_interval
+                    self.infer_node.set({"interval": new_interval})
+                    mode = "IDLE" if transition == "idle" else "ACTIVE"
+                    print(
+                        f"{mode} MODE: interval={new_interval}",
+                        flush=True,
+                    )
 
                 if self.frame_count % self.report_interval == 0:
                     elapsed = time.time() - self.start_time
@@ -441,6 +459,9 @@ def build_pipeline(
     # Source → mux → infer
     infer_flow = flow.batch_capture([file_uri]).infer(PGIE_CONFIG, interval=interval)
     infer_element_name = infer_flow._streams[0]
+
+    # Give reporter a reference to the infer element for idle optimization
+    reporter.infer_node = pipeline[infer_element_name]
 
     # infer → nvtracker (NvDCF)
     pipeline.add("nvtracker", "tracker", {
