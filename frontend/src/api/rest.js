@@ -50,11 +50,14 @@ export async function removeChannel(channelId) {
   ).json();
 }
 
-export async function setChannelPhase(channelId, phase) {
+export async function setChannelPhase(channelId, phase, { roiPolygon, entryExitLines } = {}) {
+  const body = { phase };
+  if (roiPolygon) body.roi_polygon = roiPolygon;
+  if (entryExitLines) body.entry_exit_lines = entryExitLines;
   return (
     await request(`/channel/${channelId}/phase`, {
       method: "POST",
-      body: JSON.stringify({ phase }),
+      body: JSON.stringify(body),
     })
   ).json();
 }

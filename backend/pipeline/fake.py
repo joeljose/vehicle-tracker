@@ -49,6 +49,20 @@ class FakeBackend:
         del self.channels[channel_id]
         del self.channel_phases[channel_id]
 
+    def configure_channel(
+        self, channel_id: int,
+        roi_polygon: list[tuple[float, float]],
+        entry_exit_lines: dict,
+    ) -> None:
+        if channel_id not in self.channels:
+            raise KeyError(f"Channel {channel_id} not found")
+        # Store for test inspection; not used by fake pipeline
+        self.channel_configs = getattr(self, "channel_configs", {})
+        self.channel_configs[channel_id] = {
+            "roi_polygon": roi_polygon,
+            "entry_exit_lines": entry_exit_lines,
+        }
+
     def set_channel_phase(self, channel_id: int, phase: ChannelPhase) -> None:
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")

@@ -5,6 +5,9 @@ channel management, phase transitions, MJPEG broadcaster, WebSocket
 broadcaster, alerts, snapshots, and site config.
 """
 
+from backend.tests.helpers import ANALYTICS_PHASE_BODY
+
+
 def test_full_api_lifecycle(client, app):
     """End-to-end: start → add channel → analytics → alerts → snapshot → stop."""
     backend = app.state.backend
@@ -27,9 +30,9 @@ def test_full_api_lifecycle(client, app):
     assert r1.json()["channel_id"] == 1
 
     # -- 3. Transition to analytics --
-    resp = client.post("/channel/0/phase", json={"phase": "analytics"})
+    resp = client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
     assert resp.json()["phase"] == "analytics"
-    resp = client.post("/channel/1/phase", json={"phase": "analytics"})
+    resp = client.post("/channel/1/phase", json=ANALYTICS_PHASE_BODY)
     assert resp.json()["phase"] == "analytics"
 
     # Drain phase_changed events from WS queue

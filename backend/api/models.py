@@ -13,19 +13,21 @@ class RemoveChannelRequest(BaseModel):
     channel_id: int
 
 
+class EntryExitLine(BaseModel):
+    label: str
+    start: tuple[float, float]
+    end: tuple[float, float]
+
+
 class SetPhaseRequest(BaseModel):
     phase: str
+    roi_polygon: list[tuple[float, float]] | None = None
+    entry_exit_lines: dict[str, EntryExitLine] | None = None
 
 
 class UpdateConfigRequest(BaseModel):
     confidence_threshold: float | None = None
     inference_interval: int | None = None
-
-
-class EntryExitLine(BaseModel):
-    label: str
-    start: tuple[float, float]
-    end: tuple[float, float]
 
 
 class SiteConfigRequest(BaseModel):

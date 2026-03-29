@@ -132,6 +132,14 @@ class PipelineBackend(Protocol):
         """Remove a channel, release its decoder and tracker resources."""
         ...
 
+    def configure_channel(
+        self, channel_id: int,
+        roi_polygon: list[tuple[float, float]],
+        entry_exit_lines: dict,
+    ) -> None:
+        """Set ROI and entry/exit lines for a channel. Called before analytics start."""
+        ...
+
     def set_channel_phase(self, channel_id: int, phase: ChannelPhase) -> None:
         """Transition a channel's phase. Queued and applied between frames."""
         ...
@@ -363,7 +371,7 @@ for channel_id, detections in batch_results.items():
 - Phase transitions are requested from the API thread (e.g., `POST /channel/{id}/phase`).
 - Requests are queued in a thread-safe queue.
 - The pipeline thread drains the queue **between frame batches**, under a mutex, ensuring no mid-frame state corruption.
-- **Phase 1 to 2 transition:** Creates a fresh tracker instance for that channel (clears all existing track IDs). For DeepStream, this means resetting the tracker's per-source state. For recorded video, playback resets to frame 0 and plays once (no loop).
+- **Phase 1 to 2 transition:** The frontend sends the operator's currently drawn ROI polygon and entry/exit lines with the phase transition request. The backend calls `configure_channel()` with these coordinates, then `set_channel_phase()` to start analytics. The pipeline builds with these exact coordinates — saved site configs are never auto-loaded. Creates a fresh tracker instance for that channel (clears all existing track IDs). For DeepStream, this means resetting the tracker's per-source state. For recorded video, playback resets to frame 0 and plays once (no loop).
 - **Phase 2 to 3 transition:** For recorded video, triggered automatically at video end or manually by the operator. For YouTube Live, triggered by stream end/drop (after recovery attempts fail) or operator click "Stop". The source is removed from the pipeline (DeepStream: runtime source delete via `nvstreammux`).
 - **Phase 3 to 4 transition:** Removes the channel entirely. All in-memory data (alerts, snapshots, replay data) is cleared.
 

@@ -8,6 +8,7 @@ import pytest
 
 from backend.api.websocket import WsBroadcaster
 from backend.pipeline.protocol import Detection, FrameResult
+from backend.tests.helpers import ANALYTICS_PHASE_BODY
 
 
 # -- Fixtures --
@@ -84,7 +85,7 @@ class TestGetChannels:
 
     def test_two_channels_different_phases(self, started_client, app):
         started_client.post("/channel/add", json={"source": "/data/b.mp4"})
-        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         # Seed an alert on channel 0
         app.state.alert_store.add_transit_alert(TRANSIT_ALERT, channel=0)
 
@@ -122,7 +123,7 @@ class TestGetChannel:
         assert resp.json()["alert_count"] == 1
 
     def test_reflects_phase_change(self, started_client):
-        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         resp = started_client.get("/channel/0")
         assert resp.json()["phase"] == "analytics"
 
@@ -231,7 +232,7 @@ class TestPhaseChangedEvent:
         while not ws._queue.empty():
             ws._queue.get_nowait()
 
-        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         msg = ws._queue.get_nowait()
         assert msg["type"] == "phase_changed"
         assert msg["channel"] == 0
@@ -240,7 +241,7 @@ class TestPhaseChangedEvent:
 
     def test_phase_change_review(self, started_client, app):
         ws = app.state.ws
-        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         while not ws._queue.empty():
             ws._queue.get_nowait()
 

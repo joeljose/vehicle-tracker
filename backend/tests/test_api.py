@@ -2,6 +2,8 @@
 
 import queue
 
+from backend.tests.helpers import ANALYTICS_PHASE_BODY
+
 
 class TestPipelineLifecycle:
     def test_start_pipeline(self, client):
@@ -107,7 +109,7 @@ class TestPhaseTransition:
 
     def test_set_phase_analytics(self, client):
         self._start_with_channel(client)
-        resp = client.post("/channel/0/phase", json={"phase": "analytics"})
+        resp = client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok", "phase": "analytics"}
 
@@ -124,7 +126,7 @@ class TestPhaseTransition:
 
     def test_set_phase_nonexistent_channel(self, client):
         client.post("/pipeline/start")
-        resp = client.post("/channel/99/phase", json={"phase": "analytics"})
+        resp = client.post("/channel/99/phase", json=ANALYTICS_PHASE_BODY)
         assert resp.status_code == 404
 
 
@@ -163,7 +165,7 @@ class TestIntegration:
         r = client.post("/channel/add", json={"source": "/data/video.mp4"})
         assert r.json()["channel_id"] == 0
         # Set phase
-        r = client.post("/channel/0/phase", json={"phase": "analytics"})
+        r = client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
         assert r.json()["phase"] == "analytics"
         # Update config
         assert client.patch(

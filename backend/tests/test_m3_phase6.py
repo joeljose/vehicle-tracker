@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
+from backend.tests.helpers import ANALYTICS_PHASE_BODY
+
 
 TRANSIT_ALERT = {
     "track_id": 10,
@@ -147,7 +149,7 @@ class TestReplayEndpoint:
 class TestPhaseTransitionClipExtraction:
     def test_analytics_to_review_triggers_extraction(self, started_client, app, seeded_alerts):
         # Move to analytics first
-        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
 
         with patch.object(app.state.clip_extractor, "extract_clips") as mock:
             started_client.post("/channel/0/phase", json={"phase": "review"})
@@ -159,7 +161,7 @@ class TestPhaseTransitionClipExtraction:
 
     def test_setup_to_analytics_no_extraction(self, started_client, app):
         with patch.object(app.state.clip_extractor, "extract_clips") as mock:
-            started_client.post("/channel/0/phase", json={"phase": "analytics"})
+            started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
             mock.assert_not_called()
 
 

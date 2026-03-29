@@ -69,6 +69,19 @@ class PipelineBackend(Protocol):
         """Remove a channel, release its decoder and tracker resources."""
         ...
 
+    def configure_channel(
+        self,
+        channel_id: int,
+        roi_polygon: list[tuple[float, float]],
+        entry_exit_lines: dict,
+    ) -> None:
+        """Set ROI and entry/exit lines for a channel.
+
+        Called before transitioning to analytics. The pipeline uses these
+        coordinates for direction detection and ROI filtering.
+        """
+        ...
+
     def set_channel_phase(self, channel_id: int, phase: ChannelPhase) -> None:
         """Transition a channel's phase. Queued and applied between frames."""
         ...

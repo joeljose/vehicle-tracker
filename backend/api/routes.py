@@ -162,6 +162,26 @@ def set_channel_phase(
         )
     try:
         previous = backend.get_channel_phase(channel_id)
+
+        # Configure channel with ROI/lines before starting analytics
+        if previous == ChannelPhase.SETUP and phase == ChannelPhase.ANALYTICS:
+            if not body.roi_polygon or len(body.roi_polygon) < 3:
+                raise HTTPException(
+                    status_code=422,
+                    detail="ROI polygon with at least 3 vertices required to start analytics",
+                )
+            entry_exit = {}
+            if body.entry_exit_lines:
+                entry_exit = {
+                    k: {"label": v.label, "start": list(v.start), "end": list(v.end)}
+                    for k, v in body.entry_exit_lines.items()
+                }
+            backend.configure_channel(
+                channel_id,
+                roi_polygon=[tuple(p) for p in body.roi_polygon],
+                entry_exit_lines=entry_exit,
+            )
+
         backend.set_channel_phase(channel_id, phase)
     except KeyError:
         raise HTTPException(status_code=404, detail="Channel not found")

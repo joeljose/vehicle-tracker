@@ -75,10 +75,11 @@ Each channel independently progresses through four phases. Multiple channels can
 - Detection and tracking run as a live preview -- bounding boxes with track IDs are drawn on the video. This provides visual feedback for configuration.
 - Operator draws a broad ROI polygon and entry/exit lines on the video using canvas drawing tools. Operator labels each arm (defaults: N/E/S/W, editable to road names like "741-North").
 - No alerts, direction detection, or best-photo capture occur in this phase.
-- Site configuration (ROI, lines, labels) can be saved to disk and reloaded for the same junction.
+- Site configuration (ROI, lines, labels) can be saved to disk and reloaded for the same junction. Saved configs are a convenience for persistence — they are never auto-loaded by the pipeline.
 
 ### Phase 2 -- Analytics
-- Operator clicks "Start Analytics". For recorded video: playback restarts from frame 0 and plays once. For YouTube Live: analytics starts from the current moment.
+- Operator clicks "Start Analytics". The frontend sends the currently drawn ROI polygon and entry/exit lines as part of the phase transition request. The pipeline always uses the operator's current drawing — never a saved site config.
+- For recorded video: playback restarts from frame 0 and plays once. For YouTube Live: analytics starts from the current moment.
 - Tracker is reset (fresh instance created for the channel) to avoid stale tracks from Phase 1.
 - Full pipeline runs: detection, tracking, direction detection (line crossing), best-photo capture, vehicle state classification, and alert generation.
 - Transit alerts and stagnant alerts appear in the alert feed sidebar in real time.
@@ -227,7 +228,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-59 | `POST /pipeline/stop` -- stop the pipeline and clean up GPU resources | Must |
 | F-60 | `POST /channel/add` -- add a new source channel (`{ source: "https://youtube.com/watch?v=..." \| "/path/file.mp4" }`) | Must |
 | F-61 | `POST /channel/remove` -- remove a channel (`{ channel_id: 0 }`). Clears extracted clips. | Must |
-| F-62 | `POST /channel/{id}/phase` -- transition a channel's phase. Emits `phase_changed` WS event. Analytics→Review triggers background clip extraction. | Must |
+| F-62 | `POST /channel/{id}/phase` -- transition a channel's phase. Setup→Analytics request includes `roi_polygon` and `entry_exit_lines` from the operator's drawing. Emits `phase_changed` WS event. Analytics→Review triggers background clip extraction. | Must |
 | F-63 | `PATCH /config` -- update runtime parameters (e.g., confidence threshold) | Must |
 | F-64 | `GET /stream/{channel_id}` -- MJPEG annotated video stream (Phase 1 and 2) | Must |
 | F-65 | `GET /channels` -- list all channels with phase and alert count (home page) | Must |

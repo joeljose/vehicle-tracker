@@ -259,7 +259,19 @@ function ChannelContent() {
   const handleStartAnalytics = useCallback(async () => {
     setPhaseLoading(true);
     try {
-      await setChannelPhase(channelId, "analytics");
+      // Send ROI + lines with the phase transition
+      const entryExitLines = {};
+      for (const line of lines) {
+        entryExitLines[line.label] = {
+          label: line.label,
+          start: [line.start.x, line.start.y],
+          end: [line.end.x, line.end.y],
+        };
+      }
+      await setChannelPhase(channelId, "analytics", {
+        roiPolygon: roi.map((p) => [p.x, p.y]),
+        entryExitLines,
+      });
       dispatch({ type: "SET_PHASE", phase: "analytics" });
       toast("Analytics started");
     } catch (e) {
@@ -267,7 +279,7 @@ function ChannelContent() {
     } finally {
       setPhaseLoading(false);
     }
-  }, [channelId, dispatch, toast]);
+  }, [channelId, roi, lines, dispatch, toast]);
 
   const handleConfidenceChange = useCallback((e) => {
     const val = parseFloat(e.target.value);
