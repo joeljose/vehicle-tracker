@@ -3,8 +3,10 @@ import { useParams } from "react-router-dom";
 import { ChannelProvider, useChannel } from "../contexts/ChannelContext";
 import { AlertProvider, useAlerts } from "../contexts/AlertContext";
 import { useToast } from "../components/Toast";
+import AlertFeed from "../components/AlertFeed";
 import DrawingCanvas from "../components/DrawingCanvas";
 import DrawingTools from "../components/DrawingTools";
+import StatsBar from "../components/StatsBar";
 import { getChannel, getAlerts, setChannelPhase, updateConfig } from "../api/rest";
 import { createWs } from "../api/ws";
 
@@ -86,30 +88,6 @@ function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps })
       {phase === "setup" && loaded && (
         <DrawingCanvas imgRef={imgRef} {...drawingProps} />
       )}
-    </div>
-  );
-}
-
-function AnalyticsPlaceholder() {
-  return (
-    <div className="w-[300px] bg-surface border-l border-border flex flex-col shrink-0">
-      <div className="p-4 border-b border-border">
-        <h3 className="text-sm font-semibold mb-2">Alert Feed</h3>
-        <p className="text-text-muted text-xs">Alerts will appear here during analytics.</p>
-      </div>
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-text-muted text-xs">Waiting for alerts...</p>
-      </div>
-    </div>
-  );
-}
-
-function StatsBar({ phase }) {
-  if (phase !== "analytics") return null;
-
-  return (
-    <div className="bg-surface border-t border-border px-4 py-2 flex items-center gap-6 shrink-0">
-      <span className="text-xs text-text-muted">Stats bar — Phase 5</span>
     </div>
   );
 }
@@ -380,7 +358,7 @@ function ChannelContent() {
             imgRef={imgRef}
             drawingProps={drawingProps}
           />
-          <StatsBar phase={phase} />
+          <StatsBar />
         </div>
 
         {/* Right Sidebar */}
@@ -403,7 +381,7 @@ function ChannelContent() {
             loading={phaseLoading}
           />
         ) : (
-          <AnalyticsPlaceholder />
+          <AlertFeed />
         )}
       </div>
     </div>
