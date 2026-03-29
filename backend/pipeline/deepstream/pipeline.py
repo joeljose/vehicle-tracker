@@ -1,4 +1,4 @@
-"""DeepStream detection + tracking pipeline — Phase 2: decode + detect + track + display.
+"""DeepStream detection + tracking pipeline.
 
 Builds a GStreamer pipeline via pyservicemaker that:
   1. Decodes a video file (nvurisrcbin via Flow API)
@@ -7,10 +7,10 @@ Builds a GStreamer pipeline via pyservicemaker that:
   4. Draws bounding boxes with track IDs (nvdsosd)
   5. Optionally encodes annotated output to MP4 (nvv4l2h264enc)
   6. Reports per-frame detection/tracking stats via a probe callback
+  7. Captures best-photo crops per tracked vehicle (Phase 7)
 """
 
-from pyservicemaker import Pipeline, Flow, Probe, BatchMetadataOperator
-from pyservicemaker.flow import RenderMode
+from pyservicemaker import Pipeline, Flow, Probe, BatchMetadataOperator, BufferOperator
 import os
 import time
 
@@ -27,6 +27,7 @@ from backend.pipeline.direction import (
     check_line_crossing,
 )
 from backend.pipeline.roi import point_in_polygon
+from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.trajectory import TrajectoryBuffer
 
 
@@ -39,6 +40,8 @@ class TrackingReporter(BatchMetadataOperator):
         roi_polygon: list[tuple[float, float]] | None = None,
         lines: dict[str, LineSeg] | None = None,
         report_interval: int = 100,
+        best_photo: BestPhotoTracker | None = None,
+        snapshot_dir: str = "snapshots",
     ):
         super().__init__()
         self.labels = labels
@@ -60,6 +63,9 @@ class TrackingReporter(BatchMetadataOperator):
         # Track lifecycle state
         self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame, trajectory, dsm}
         self.lost_tracks: list[dict] = []
+        # Best-photo capture
+        self.best_photo = best_photo
+        self.snapshot_dir = snapshot_dir
 
     def handle_metadata(self, batch_meta):
         try:
@@ -142,6 +148,16 @@ class TrackingReporter(BatchMetadataOperator):
                                     flush=True,
                                 )
 
+                    # Best-photo scoring (ROI-active tracks only)
+                    if in_roi and self.best_photo:
+                        area = rect.width * rect.height
+                        self.best_photo.score(
+                            track_id=track_id,
+                            area=area,
+                            confidence=obj_meta.confidence,
+                            bbox=(rect.left, rect.top, rect.width, rect.height),
+                        )
+
                 self.total_detections += frame_detections
 
                 # Detect lost tracks (not seen this frame)
@@ -157,6 +173,10 @@ class TrackingReporter(BatchMetadataOperator):
                         f"Track #{tid} lost after {lifetime} frames",
                         flush=True,
                     )
+
+                    # Save best photo on track loss
+                    if self.best_photo:
+                        self.best_photo.save(tid, self.snapshot_dir)
 
                     # Try to infer direction on track loss
                     dsm = track["dsm"]
@@ -286,12 +306,44 @@ class TrackingReporter(BatchMetadataOperator):
         }
 
 
+class FrameExtractor(BufferOperator):
+    """BufferOperator probe that extracts frame data for best-photo cropping.
+
+    Runs on the RGB-converted branch of the pipeline.  Each frame, it
+    converts the GPU buffer to a numpy array via CuPy and calls
+    BestPhotoTracker.extract_crops() for any pending best-score updates.
+    """
+
+    def __init__(self, best_photo: BestPhotoTracker):
+        super().__init__()
+        self.best_photo = best_photo
+
+    def handle_buffer(self, buffer):
+        try:
+            if not self.best_photo.pending_crops:
+                return True
+
+            import cupy as cp
+
+            for batch_id in range(buffer.batch_size):
+                tensor = buffer.extract(batch_id)
+                gpu_arr = cp.from_dlpack(tensor)
+                frame = cp.asnumpy(gpu_arr)
+                self.best_photo.extract_crops(frame)
+
+            return True
+        except Exception as e:
+            print(f"ERROR in FrameExtractor: {e}", flush=True)
+            return True
+
+
 def build_pipeline(
     video_path: str,
     output_path: str | None = None,
     interval: int = 0,
     roi_polygon: list[tuple[float, float]] | None = None,
     lines: dict[str, LineSeg] | None = None,
+    snapshot_dir: str = "snapshots",
 ) -> tuple[Pipeline, Flow, TrackingReporter]:
     """Build a DeepStream detection + tracking pipeline.
 
@@ -301,13 +353,22 @@ def build_pipeline(
         interval: nvinfer interval (0 = every frame, 1 = every 2nd frame).
         roi_polygon: ROI polygon vertices. Tracks outside are tagged roi_active=False.
         lines: Entry/exit line segments keyed by arm ID.
+        snapshot_dir: Directory for best-photo JPEG output.
 
     Returns:
         (pipeline, flow, reporter) tuple. Call flow() to run.
     """
     file_uri = f"file://{os.path.abspath(video_path)}"
     labels = load_labels()
-    reporter = TrackingReporter(labels, roi_polygon=roi_polygon, lines=lines)
+    best_photo = BestPhotoTracker()
+    reporter = TrackingReporter(
+        labels,
+        roi_polygon=roi_polygon,
+        lines=lines,
+        best_photo=best_photo,
+        snapshot_dir=snapshot_dir,
+    )
+    extractor = FrameExtractor(best_photo)
 
     pipeline = Pipeline("vehicle-tracker")
     flow = Flow(pipeline, [file_uri])
@@ -326,19 +387,39 @@ def build_pipeline(
     })
     pipeline.link(infer_element_name, "tracker")
 
-    # Attach probe after tracker
-    tracker_flow = Flow(pipeline, ["tracker"])
-    probed = tracker_flow.attach(Probe("reporter", reporter))
+    # Attach metadata probe on tracker (scores detections before buffer flows downstream)
+    pipeline.attach("tracker", Probe("reporter", reporter))
 
     if output_path:
-        # tracker → OSD (draws bboxes + track IDs) → encode to MP4
+        # With output: tracker → tee → [RGB snapshot branch] + [OSD → encode branch]
+        pipeline.add("tee", "split", {})
+        pipeline.link("tracker", "split")
+
+        # Branch 1: RGB for best-photo
+        pipeline.add("queue", "snap_queue", {})
+        pipeline.add("nvvideoconvert", "snap_conv", {})
+        pipeline.add("capsfilter", "snap_caps", {
+            "caps": "video/x-raw(memory:NVMM),format=RGB",
+        })
+        pipeline.add("fakesink", "snap_sink", {"sync": False})
+        pipeline.link("split", "snap_queue", "snap_conv", "snap_caps", "snap_sink")
+        pipeline.attach("snap_caps", Probe("extractor", extractor))
+
+        # Branch 2: OSD → encode
+        pipeline.add("queue", "out_queue", {})
         pipeline.add("nvdsosd", "osd", {"gpu-id": 0})
-        pipeline.link("tracker", "osd")
+        pipeline.link("split", "out_queue", "osd")
         osd_flow = Flow(pipeline, ["osd"])
         osd_flow.encode(f"file://{os.path.abspath(output_path)}")
     else:
-        # No output — discard frames after probe
-        probed.render(mode=RenderMode.DISCARD, enable_osd=False)
+        # No output: linear — tracker → RGB conversion → [buffer probe] → fakesink
+        pipeline.add("nvvideoconvert", "snap_conv", {})
+        pipeline.add("capsfilter", "snap_caps", {
+            "caps": "video/x-raw(memory:NVMM),format=RGB",
+        })
+        pipeline.add("fakesink", "snap_sink", {"sync": False})
+        pipeline.link("tracker", "snap_conv", "snap_caps", "snap_sink")
+        pipeline.attach("snap_caps", Probe("extractor", extractor))
 
     return pipeline, flow, reporter
 
@@ -349,6 +430,7 @@ def run_pipeline(
     interval: int = 0,
     roi_polygon: list[tuple[float, float]] | None = None,
     lines: dict[str, LineSeg] | None = None,
+    snapshot_dir: str = "snapshots",
 ) -> dict:
     """Run the detection + tracking pipeline to completion and return stats.
 
@@ -358,6 +440,7 @@ def run_pipeline(
         interval: nvinfer interval.
         roi_polygon: ROI polygon vertices for filtering.
         lines: Entry/exit line segments keyed by arm ID.
+        snapshot_dir: Directory for best-photo JPEG output.
 
     Returns:
         Detection and tracking summary dict.
@@ -365,6 +448,7 @@ def run_pipeline(
     pipeline, flow, reporter = build_pipeline(
         video_path, output_path, interval,
         roi_polygon=roi_polygon, lines=lines,
+        snapshot_dir=snapshot_dir,
     )
 
     print(f"Starting pipeline: {video_path}", flush=True)
@@ -373,6 +457,11 @@ def run_pipeline(
         print(f"  output={output_path}", flush=True)
 
     flow()
+
+    # Save any remaining active tracks' photos
+    if reporter.best_photo:
+        for tid in list(reporter.active_tracks):
+            reporter.best_photo.save(tid, reporter.snapshot_dir)
 
     summary = reporter.summary()
     print(
