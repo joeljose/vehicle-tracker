@@ -49,4 +49,5 @@ exports/
 .env.local
 CLAUDE.md
 .ds-cache
+.node-cache
 .pytest_cache

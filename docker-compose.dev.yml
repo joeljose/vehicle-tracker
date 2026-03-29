@@ -27,12 +27,15 @@ services:
 
   frontend:
     image: node:22-alpine
+    user: "${DS_UID}:${DS_GID}"
     volumes:
       - ./frontend:/app
+      - ./.node-cache:/home/node
     ports:
       - "5173:5173"
     working_dir: /app
-    command: ["sh", "-c", "[ -f package.json ] && npm ci && npm run dev -- --host || echo 'No frontend yet.' && tail -f /dev/null"]
-    profiles:
-      - full
+    environment:
+      - HOME=/home/node
+      - npm_config_cache=/home/node/.npm
+    command: ["sh", "-c", "npm install && npm run dev -- --host"]
 

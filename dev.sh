@@ -10,5 +10,6 @@ export DS_GID="$(id -g)"
 
 # Ensure cache dirs exist (bind-mounted into container)
 mkdir -p .ds-cache/.local .ds-cache/.cache
+mkdir -p .node-cache/.npm
 
 exec docker compose -f docker-compose.dev.yml "$@"
