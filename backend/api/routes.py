@@ -1,6 +1,7 @@
 """Pipeline control REST endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from backend.api.deps import get_alert_store, get_backend
 from backend.api.models import (
@@ -115,3 +116,34 @@ def update_config(
     if body.inference_interval is not None:
         backend.set_inference_interval(body.inference_interval)
     return StatusResponse(status="updated")
+
+
+@router.get("/alerts")
+def list_alerts(
+    limit: int = Query(default=50, ge=1, le=200),
+    type: str | None = Query(default=None),
+    alert_store: AlertStore = Depends(get_alert_store),
+):
+    return alert_store.get_alerts(limit=limit, alert_type=type)
+
+
+@router.get("/alert/{alert_id}")
+def get_alert(
+    alert_id: str,
+    alert_store: AlertStore = Depends(get_alert_store),
+):
+    alert = alert_store.get_alert(alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
+@router.get("/snapshot/{track_id}")
+def get_snapshot(
+    track_id: int,
+    backend: PipelineBackend = Depends(get_backend),
+):
+    jpeg = backend.get_snapshot(track_id)
+    if jpeg is None:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return Response(content=jpeg, media_type="image/jpeg")
