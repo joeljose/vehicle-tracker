@@ -11,11 +11,16 @@
       theme: {
         extend: {
           colors: {
-            background: '#0f1117',
-            surface: '#1a1d23',
-            border: '#2a2d35',
-            'text-primary': '#e1e1e1',
-            'text-secondary': '#9ca3af',
+            background: '#09090b',
+            surface: '#18181b',
+            elevated: '#27272a',
+            border: '#27272a',
+            'border-strong': '#3f3f46',
+            'text-primary': '#fafafa',
+            'text-secondary': '#a1a1aa',
+            'text-muted': '#71717a',
+            accent: '#6366f1',
+            'accent-hover': '#818cf8',
             'transit-blue': '#60a5fa',
             'stagnant-amber': '#fbbf24',
             'active-green': '#4ade80',
@@ -27,27 +32,28 @@
   </script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .state-label { border-top: 1px solid #27272a; padding-top: 2rem; margin-top: 2.5rem; }
   </style>
 </head>
 <body class="bg-background text-text-primary min-h-screen flex flex-col">
 
-  <!-- Control Bar (top) -->
+  <!-- Control Bar -->
   <div class="bg-surface border-b border-border px-4 py-2.5 flex items-center justify-between shrink-0">
     <div class="flex items-center gap-4">
-      <a href="home.html" class="text-text-secondary hover:text-text-primary transition-colors text-sm flex items-center gap-1.5">
+      <a href="home.html" class="text-text-muted hover:text-text-primary transition-colors text-sm flex items-center gap-1.5">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         Home
       </a>
       <div class="h-4 w-px bg-border"></div>
       <span class="text-sm font-semibold">Channel 0</span>
-      <span class="text-text-secondary text-xs truncate max-w-[200px]">/data/lytle_south.mp4</span>
+      <span class="text-text-muted text-xs truncate max-w-[200px]">/data/lytle_south.mp4</span>
     </div>
 
     <!-- Phase Indicator -->
     <div class="flex items-center gap-1 bg-background rounded-lg p-0.5">
       <button class="px-3 py-1.5 text-xs font-medium rounded-md bg-stagnant-amber/10 text-stagnant-amber">Setup</button>
-      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary transition-colors">Analytics</button>
-      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary transition-colors">Review</button>
+      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-muted" disabled>Analytics</button>
+      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-muted" disabled>Review</button>
     </div>
 
     <div class="flex items-center gap-3">
@@ -61,75 +67,79 @@
   <!-- Main Content -->
   <div class="flex flex-1 min-h-0">
 
-    <!-- Video Panel (left) -->
+    <!-- Video Panel -->
     <div class="flex-1 flex flex-col min-w-0">
-      <!-- Video + Canvas Overlay -->
       <div class="flex-1 relative bg-black flex items-center justify-center">
-        <!-- MJPEG placeholder with mock ROI and lines drawn -->
         <div class="relative" style="width: 960px; height: 540px; background: #111;">
-          <!-- Simulated video frame (dark placeholder) -->
-          <div class="absolute inset-0 bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
-            <span class="text-text-secondary text-sm">MJPEG Live Feed — 1920x1080</span>
+          <div class="absolute inset-0 bg-gradient-to-br from-zinc-900 to-zinc-800 flex items-center justify-center">
+            <span class="text-text-muted text-sm">MJPEG Live Feed — 1920x1080</span>
           </div>
 
-          <!-- Mock ROI polygon overlay -->
+          <!-- Canvas overlay: ROI polygon + entry/exit lines -->
           <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 540">
-            <!-- ROI polygon -->
+            <!-- ROI polygon (closed, solid stroke, 15% fill) -->
             <polygon
               points="120,80 840,80 880,460 80,460"
-              fill="rgba(96,165,250,0.08)"
-              stroke="#60a5fa"
+              fill="rgba(99,102,241,0.12)"
+              stroke="#6366f1"
               stroke-width="2"
-              stroke-dasharray="6,3"
             />
-            <!-- ROI vertices -->
-            <circle cx="120" cy="80" r="5" fill="#60a5fa" stroke="#0f1117" stroke-width="2"/>
-            <circle cx="840" cy="80" r="5" fill="#60a5fa" stroke="#0f1117" stroke-width="2"/>
-            <circle cx="880" cy="460" r="5" fill="#60a5fa" stroke="#0f1117" stroke-width="2"/>
-            <circle cx="80" cy="460" r="5" fill="#60a5fa" stroke="#0f1117" stroke-width="2"/>
+            <!-- ROI vertices (white, 6px; first vertex green, 8px) -->
+            <circle cx="120" cy="80" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <circle cx="840" cy="80" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <circle cx="880" cy="460" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <circle cx="80" cy="460" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
 
-            <!-- Entry/exit line: North -->
+            <!-- Entry/exit line: North (green, 3px) -->
             <line x1="200" y1="100" x2="760" y2="100" stroke="#4ade80" stroke-width="3"/>
-            <circle cx="200" cy="100" r="4" fill="#4ade80"/>
-            <circle cx="760" cy="100" r="4" fill="#4ade80"/>
-            <text x="480" y="92" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">North</text>
+            <circle cx="200" cy="100" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <circle cx="760" cy="100" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <rect x="440" y="78" width="80" height="20" rx="4" fill="rgba(0,0,0,0.7)"/>
+            <text x="480" y="92" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="600">North</text>
 
-            <!-- Entry/exit line: South -->
+            <!-- Entry/exit line: South (amber, 3px) -->
             <line x1="160" y1="440" x2="800" y2="440" stroke="#fbbf24" stroke-width="3"/>
-            <circle cx="160" cy="440" r="4" fill="#fbbf24"/>
-            <circle cx="800" cy="440" r="4" fill="#fbbf24"/>
-            <text x="480" y="432" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">South</text>
+            <circle cx="160" cy="440" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <circle cx="800" cy="440" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+            <rect x="440" y="418" width="80" height="20" rx="4" fill="rgba(0,0,0,0.7)"/>
+            <text x="480" y="432" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">South</text>
           </svg>
+
+          <!-- Drawing mode cursor tooltip (shown during drawing) -->
+          <div class="absolute top-3 left-3 bg-black/70 text-text-secondary text-xs px-2.5 py-1.5 rounded-md">
+            Click first point or double-click to close &nbsp;·&nbsp; Ctrl+Z to undo
+          </div>
         </div>
       </div>
 
-      <!-- Stats Bar (bottom) -->
-      <div class="bg-surface border-t border-border px-4 py-2 flex items-center gap-6 text-xs shrink-0">
-        <span class="text-text-secondary">FPS: <span class="text-text-primary font-medium">—</span></span>
-        <span class="text-text-secondary">Tracks: <span class="text-text-primary font-medium">—</span></span>
-        <span class="text-text-secondary">Inference: <span class="text-text-primary font-medium">—</span></span>
-        <span class="text-text-secondary">Phase: <span class="text-stagnant-amber font-medium">Setup</span></span>
-      </div>
+      <!-- No stats bar in Setup phase (per PRD) -->
     </div>
 
     <!-- Right Panel — Drawing Tools + Config -->
-    <div class="w-[320px] bg-surface border-l border-border flex flex-col shrink-0">
+    <div class="w-[300px] bg-surface border-l border-border flex flex-col shrink-0">
       <!-- Drawing Tools -->
       <div class="p-4 border-b border-border">
         <h3 class="text-sm font-semibold mb-3">Drawing Tools</h3>
 
         <div class="space-y-2">
-          <!-- ROI tool -->
-          <button class="w-full flex items-center gap-3 px-3 py-2.5 bg-transit-blue/10 border border-transit-blue/30 rounded-lg text-sm text-transit-blue">
+          <!-- ROI tool (active state) -->
+          <button class="w-full flex items-center gap-3 px-3 py-2.5 bg-accent/10 border border-accent/30 rounded-lg text-sm text-accent">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z"/></svg>
             Draw ROI Polygon
-            <span class="ml-auto text-xs text-transit-blue/60">Active</span>
+            <span class="ml-auto text-xs text-accent/60">Active</span>
           </button>
 
           <!-- Entry/Exit Line tool -->
-          <button class="w-full flex items-center gap-3 px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-text-secondary hover:text-text-primary hover:border-text-secondary transition-colors">
+          <button class="w-full flex items-center gap-3 px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12h16"/></svg>
             Add Entry/Exit Line
+          </button>
+
+          <!-- Undo (UX-D) -->
+          <button class="w-full flex items-center gap-3 px-3 py-2.5 bg-background border border-border rounded-lg text-sm text-text-secondary hover:text-text-primary hover:border-border-strong transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"/></svg>
+            Undo Last Point
+            <span class="ml-auto text-xs text-text-muted">Ctrl+Z</span>
           </button>
 
           <!-- Clear All -->
@@ -149,7 +159,7 @@
               <span class="w-2.5 h-2.5 rounded-full bg-active-green"></span>
               <span class="text-sm">North</span>
             </div>
-            <button class="text-text-secondary hover:text-error-red transition-colors">
+            <button class="text-text-muted hover:text-error-red transition-colors">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
           </div>
@@ -158,7 +168,7 @@
               <span class="w-2.5 h-2.5 rounded-full bg-stagnant-amber"></span>
               <span class="text-sm">South</span>
             </div>
-            <button class="text-text-secondary hover:text-error-red transition-colors">
+            <button class="text-text-muted hover:text-error-red transition-colors">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
           </div>
@@ -168,48 +178,112 @@
       <!-- Site Config -->
       <div class="p-4 flex-1">
         <h3 class="text-sm font-semibold mb-3">Site Configuration</h3>
-
         <div class="space-y-3">
           <div>
-            <label class="text-xs text-text-secondary block mb-1">Site ID</label>
-            <div class="flex gap-2">
-              <input
-                type="text"
-                value="741_73"
-                class="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-transit-blue/50"
-              >
-            </div>
+            <label class="text-xs text-text-muted block mb-1">Site ID</label>
+            <input type="text" value="741_73"
+              class="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent/50">
           </div>
-
           <div class="flex gap-2">
-            <button class="flex-1 px-3 py-2 bg-transit-blue text-white rounded-lg text-sm font-medium hover:bg-transit-blue/90 transition-colors">
-              Save Config
+            <button class="flex-1 px-3 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors">
+              Save
             </button>
             <button class="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm text-text-secondary hover:text-text-primary transition-colors">
-              Load Config
+              Load
             </button>
           </div>
-
-          <!-- Saved configs dropdown -->
           <div>
-            <label class="text-xs text-text-secondary block mb-1">Saved Configs</label>
-            <select class="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-transit-blue/50 appearance-none">
+            <label class="text-xs text-text-muted block mb-1">Saved Configs</label>
+            <select class="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent/50">
               <option>741_73</option>
               <option>lytle_south</option>
-              <option>test_junction</option>
             </select>
+          </div>
+
+          <!-- Confidence Threshold (PRD F-77) -->
+          <div>
+            <label class="text-xs text-text-muted block mb-1">Confidence Threshold</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="0" max="100" value="50"
+                class="flex-1 h-1.5 bg-elevated rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer">
+              <span class="text-xs text-text-secondary w-8 text-right">0.50</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Bottom action -->
-      <div class="p-4 border-t border-border">
+      <!-- Bottom action (UX-A: disabled when no ROI) -->
+      <div class="p-4 border-t border-border space-y-3">
+        <!-- Enabled state (ROI drawn) -->
         <button class="w-full px-4 py-2.5 bg-active-green/10 text-active-green border border-active-green/20 rounded-lg text-sm font-medium hover:bg-active-green/20 transition-colors">
-          Start Analytics →
+          Start Analytics
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Disabled button state ==================== -->
+  <div class="p-6">
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">UX-A: Start Analytics disabled (no ROI drawn)</p>
+      <div class="w-[300px]">
+        <button disabled class="w-full px-4 py-2.5 bg-elevated border border-border rounded-lg text-sm font-medium text-text-muted cursor-not-allowed">
+          Draw ROI to continue
         </button>
       </div>
     </div>
 
+    <!-- ==================== Drawing in progress (rubber band) ==================== -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">Drawing Mode: ROI in progress (3 vertices placed, rubber band to cursor)</p>
+      <div class="relative bg-black rounded-xl overflow-hidden" style="width: 600px; height: 340px;">
+        <div class="absolute inset-0 bg-gradient-to-br from-zinc-900 to-zinc-800"></div>
+        <svg class="absolute inset-0 w-full h-full" viewBox="0 0 600 340">
+          <!-- Placed edges (solid) -->
+          <line x1="100" y1="60" x2="480" y2="50" stroke="#6366f1" stroke-width="2"/>
+          <line x1="480" y1="50" x2="500" y2="270" stroke="#6366f1" stroke-width="2"/>
+          <!-- Rubber band to cursor (solid) -->
+          <line x1="500" y1="270" x2="350" y2="300" stroke="#6366f1" stroke-width="2" opacity="0.6"/>
+          <!-- Closing preview (dashed) -->
+          <line x1="350" y1="300" x2="100" y2="60" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.4"/>
+          <!-- Vertices -->
+          <circle cx="100" cy="60" r="6" fill="#4ade80" stroke="#09090b" stroke-width="2"/> <!-- First = green -->
+          <circle cx="480" cy="50" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+          <circle cx="500" cy="270" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+          <!-- Cursor position (crosshair indicator) -->
+          <circle cx="350" cy="300" r="3" fill="#6366f1" opacity="0.5"/>
+        </svg>
+        <div class="absolute top-3 left-3 bg-black/70 text-text-secondary text-xs px-2.5 py-1.5 rounded-md">
+          Click first point or double-click to close &nbsp;·&nbsp; Ctrl+Z to undo &nbsp;·&nbsp; Esc to cancel
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== Line label input ==================== -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">Drawing Mode: Line placed, label input at midpoint</p>
+      <div class="relative bg-black rounded-xl overflow-hidden" style="width: 600px; height: 200px;">
+        <div class="absolute inset-0 bg-gradient-to-br from-zinc-900 to-zinc-800"></div>
+        <svg class="absolute inset-0 w-full h-full" viewBox="0 0 600 200">
+          <line x1="120" y1="100" x2="480" y2="100" stroke="#4ade80" stroke-width="3"/>
+          <circle cx="120" cy="100" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+          <circle cx="480" cy="100" r="5" fill="#fafafa" stroke="#09090b" stroke-width="2"/>
+        </svg>
+        <!-- Label input popover -->
+        <div class="absolute" style="left: 240px; top: 60px;">
+          <div class="bg-surface border border-border-strong rounded-lg shadow-xl p-2 w-[140px]">
+            <input type="text" placeholder="Label..." value="East"
+              class="w-full px-2 py-1.5 bg-background border border-border rounded text-sm text-text-primary focus:outline-none focus:border-accent/50 text-center" autofocus>
+            <div class="flex gap-1 mt-1.5">
+              <button class="flex-1 px-1 py-1 text-[10px] text-text-muted hover:text-text-primary bg-background rounded">N</button>
+              <button class="flex-1 px-1 py-1 text-[10px] text-text-muted hover:text-text-primary bg-background rounded">S</button>
+              <button class="flex-1 px-1 py-1 text-[10px] text-accent bg-accent/10 rounded font-medium">E</button>
+              <button class="flex-1 px-1 py-1 text-[10px] text-text-muted hover:text-text-primary bg-background rounded">W</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
 </body>
