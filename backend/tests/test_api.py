@@ -281,3 +281,143 @@ class TestMjpegBroadcaster:
         broadcaster.on_frame(result)
         assert q0.get_nowait() == b"\xff\xd8ch0"
         assert q1.empty()
+
+
+class TestWebSocket:
+    def test_ws_connect(self, client):
+        with client.websocket_connect("/ws"):
+            pass
+
+    def test_ws_connect_with_channel_filter(self, client):
+        with client.websocket_connect("/ws?channels=0,1"):
+            pass
+
+
+class TestWsBroadcaster:
+    """Unit tests for WsBroadcaster — tests message building and filtering."""
+
+    def test_on_frame_builds_message(self, app):
+        from backend.pipeline.protocol import Detection, FrameResult
+        ws_broadcaster = app.state.ws
+        result = FrameResult(
+            channel_id=0,
+            frame_number=42,
+            timestamp_ms=1400,
+            detections=[
+                Detection(
+                    track_id=7,
+                    class_name="car",
+                    bbox=(412, 305, 129, 73),
+                    confidence=0.91,
+                    centroid=(476, 341),
+                ),
+            ],
+            annotated_jpeg=b"\xff\xd8test",
+        )
+        ws_broadcaster.on_frame(result)
+        msg = ws_broadcaster._queue.get_nowait()
+        assert msg["type"] == "frame_data"
+        assert msg["channel"] == 0
+        assert msg["frame"] == 42
+        assert msg["timestamp_ms"] == 1400
+        assert len(msg["tracks"]) == 1
+        track = msg["tracks"][0]
+        assert track["id"] == 7
+        assert track["class"] == "car"
+        assert track["bbox"] == [412, 305, 129, 73]
+        assert track["confidence"] == 0.91
+        assert track["centroid"] == [476, 341]
+
+    def test_on_alert_enqueues(self, app):
+        ws_broadcaster = app.state.ws
+        alert = {
+            "type": "transit_alert",
+            "channel": 0,
+            "alert_id": "abc123",
+            "track_id": 5,
+        }
+        ws_broadcaster.on_alert(alert)
+        msg = ws_broadcaster._queue.get_nowait()
+        assert msg["type"] == "transit_alert"
+        assert msg["alert_id"] == "abc123"
+
+    def test_on_track_ended_enqueues(self, app):
+        ws_broadcaster = app.state.ws
+        track = {
+            "type": "track_ended",
+            "channel": 0,
+            "track_id": 7,
+            "class": "car",
+            "state": "completed",
+        }
+        ws_broadcaster.on_track_ended(track)
+        msg = ws_broadcaster._queue.get_nowait()
+        assert msg["type"] == "track_ended"
+        assert msg["track_id"] == 7
+
+    def test_enqueue_from_route_handler(self, client, app):
+        """Pipeline start/stop enqueues pipeline_event messages."""
+        ws_broadcaster = app.state.ws
+        # Drain any existing messages
+        while not ws_broadcaster._queue.empty():
+            ws_broadcaster._queue.get_nowait()
+        client.post("/pipeline/start")
+        msg = ws_broadcaster._queue.get_nowait()
+        assert msg["type"] == "pipeline_event"
+        assert msg["event"] == "started"
+
+    def test_enqueue_stop_event(self, client, app):
+        ws_broadcaster = app.state.ws
+        client.post("/pipeline/start")
+        # Drain the start event
+        while not ws_broadcaster._queue.empty():
+            ws_broadcaster._queue.get_nowait()
+        client.post("/pipeline/stop")
+        msg = ws_broadcaster._queue.get_nowait()
+        assert msg["type"] == "pipeline_event"
+        assert msg["event"] == "stopped"
+
+    def test_broadcast_filters_by_channel(self):
+        """Verify _broadcast respects channel filtering."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from backend.api.websocket import WsBroadcaster
+
+        broadcaster = WsBroadcaster()
+
+        # Create mock WS clients
+        ws_all = MagicMock()
+        ws_all.send_text = AsyncMock()
+        ws_ch0 = MagicMock()
+        ws_ch0.send_text = AsyncMock()
+
+        broadcaster._clients = [
+            (ws_all, None),       # no filter — receives all
+            (ws_ch0, {0}),        # only channel 0
+        ]
+
+        # Broadcast a channel 1 message
+        msg = {"type": "track_ended", "channel": 1, "track_id": 5}
+        asyncio.run(broadcaster._broadcast(msg))
+
+        # ws_all should receive it, ws_ch0 should NOT
+        ws_all.send_text.assert_called_once()
+        ws_ch0.send_text.assert_not_called()
+
+    def test_broadcast_no_channel_goes_to_all(self):
+        """Messages without a channel field go to all clients."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from backend.api.websocket import WsBroadcaster
+
+        broadcaster = WsBroadcaster()
+
+        ws_ch0 = MagicMock()
+        ws_ch0.send_text = AsyncMock()
+        broadcaster._clients = [(ws_ch0, {0})]
+
+        msg = {"type": "pipeline_event", "event": "started", "detail": "test"}
+        asyncio.run(broadcaster._broadcast(msg))
+
+        # pipeline_event has no channel — should be sent
+        ws_ch0.send_text.assert_called_once()

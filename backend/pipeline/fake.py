@@ -99,3 +99,13 @@ class FakeBackend:
             annotated_jpeg=jpeg,
         )
         self._frame_callback(result)
+
+    def emit_alert(self, alert: dict) -> None:
+        """Simulate pipeline producing an alert. Calls registered alert callback."""
+        if self._alert_callback is not None:
+            self._alert_callback(alert)
+
+    def emit_track_ended(self, track: dict) -> None:
+        """Simulate pipeline producing a track_ended event."""
+        if self._track_ended_callback is not None:
+            self._track_ended_callback(track)

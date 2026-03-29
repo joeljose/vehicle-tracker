@@ -28,6 +28,11 @@ def start_pipeline(
     except RuntimeError:
         raise HTTPException(status_code=409, detail="Pipeline already started")
     request.app.state.pipeline_started = True
+    request.app.state.ws.enqueue({
+        "type": "pipeline_event",
+        "event": "started",
+        "detail": "Pipeline started",
+    })
     return StatusResponse(status="started")
 
 
@@ -44,6 +49,11 @@ def stop_pipeline(
     request.app.state.pipeline_started = False
     request.app.state.next_channel_id = 0
     alert_store.clear()
+    request.app.state.ws.enqueue({
+        "type": "pipeline_event",
+        "event": "stopped",
+        "detail": "Pipeline stopped",
+    })
     return StatusResponse(status="stopped")
 
 
