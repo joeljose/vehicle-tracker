@@ -156,6 +156,10 @@ class AlertStore:
             return None
         return self._to_summary(alert)
 
+    def get_channel_alerts(self, channel: int) -> list[dict]:
+        """Get all full alert metadata for a channel (for clip extraction)."""
+        return [a for a in self._alerts.values() if a["channel"] == channel]
+
     def count_by_channel(self, channel: int) -> int:
         """Count alerts for a specific channel."""
         return sum(1 for a in self._alerts.values() if a["channel"] == channel)

@@ -12,6 +12,7 @@ from backend.api.routes import router
 from backend.api.websocket import WsBroadcaster
 from backend.api.websocket import router as ws_router
 from backend.pipeline.alerts import AlertStore
+from backend.pipeline.clip_extractor import ClipExtractor
 from backend.pipeline.protocol import FrameResult
 
 
@@ -20,8 +21,10 @@ async def lifespan(app: FastAPI):
     # Startup: start WS broadcaster drain loop
     await app.state.ws.start()
     yield
-    # Shutdown: stop WS broadcaster and pipeline
+    # Shutdown: stop WS broadcaster, clip extractor, and pipeline
     await app.state.ws.stop()
+    app.state.clip_extractor.shutdown()
+    app.state.clip_extractor.cleanup_all()
     if app.state.pipeline_started:
         app.state.backend.stop()
 
@@ -51,6 +54,7 @@ def create_app(backend: str = "deepstream") -> FastAPI:
     )
     app.state.backend = pipeline_backend
     app.state.alert_store = AlertStore()
+    app.state.clip_extractor = ClipExtractor()
     app.state.pipeline_started = False
     app.state.next_channel_id = 0
 
