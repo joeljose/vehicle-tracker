@@ -4,6 +4,8 @@ from pathlib import Path
 
 # Paths inside the container
 PGIE_CONFIG = "/app/config/deepstream/pgie_config.yml"
+TRACKER_CONFIG = "/app/config/deepstream/tracker_config.yml"
+TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 LABELS_FILE = "/app/config/deepstream/labels.txt"
 
 # Model paths (inside the DS container)

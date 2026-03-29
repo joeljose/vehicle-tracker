@@ -1,4 +1,4 @@
-"""Phase 1 tests: DeepStream detection pipeline."""
+"""Detection pipeline tests."""
 
 import os
 import pytest
