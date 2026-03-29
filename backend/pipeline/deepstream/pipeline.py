@@ -47,11 +47,17 @@ class TrackingReporter(BatchMetadataOperator):
         report_interval: int = 100,
         best_photo: BestPhotoTracker | None = None,
         snapshot_dir: str = "snapshots",
+        channel_id: int = 0,
+        alert_callback=None,
+        track_ended_callback=None,
     ):
         super().__init__()
         self.labels = labels
         self.roi_polygon = roi_polygon
         self.report_interval = report_interval
+        self.channel_id = channel_id
+        self.alert_callback = alert_callback
+        self.track_ended_callback = track_ended_callback
         # Line crossing state
         self.line_calibrations: dict[str, LineCalibration] = {}
         if lines:
@@ -177,6 +183,19 @@ class TrackingReporter(BatchMetadataOperator):
                                     "STAGNANT: Track #%d after %ds",
                                     track_id, self.stagnant_threshold_sec,
                                 )
+                                if self.alert_callback:
+                                    self.alert_callback({
+                                        "type": "stagnant_alert",
+                                        "track_id": track_id,
+                                        "label": track_state["label"],
+                                        "position": (cx, cy),
+                                        "stationary_duration_frames": (
+                                            self.frame_count - dsm.stopped_since_frame
+                                        ),
+                                        "first_seen_frame": track_state["first_frame"],
+                                        "last_seen_frame": self.frame_count,
+                                        "channel": self.channel_id,
+                                    })
 
                     # Best-photo scoring (ROI-active tracks only)
                     if in_roi and self.best_photo:
@@ -219,14 +238,17 @@ class TrackingReporter(BatchMetadataOperator):
                         # Non-ROI track — finalize immediately
                         if self.best_photo:
                             self.best_photo.save(tid, self.snapshot_dir)
-                        self.lost_tracks.append({
+                        lost_track = {
                             "track_id": tid,
                             "label": track["label"],
                             "lifetime": lifetime,
                             "trajectory": track["trajectory"].get_full(),
                             "roi_active": False,
                             "direction_state": track["dsm"].state.value,
-                        })
+                        }
+                        self.lost_tracks.append(lost_track)
+                        if self.track_ended_callback:
+                            self.track_ended_callback(lost_track)
 
                 # Idle optimization
                 transition = self.idle_optimizer.update(
@@ -273,21 +295,28 @@ class TrackingReporter(BatchMetadataOperator):
             if alert:
                 alert["track_id"] = tid
                 alert["frame"] = self.frame_count
+                alert["label"] = label
+                alert["channel"] = self.channel_id
                 self.transit_alerts.append(alert)
                 logger.info(
                     "TRANSIT: Track #%d: %s -> %s (%s)",
                     tid, alert["entry_label"], alert["exit_label"],
                     alert["method"],
                 )
+                if self.alert_callback:
+                    self.alert_callback(alert)
 
-        self.lost_tracks.append({
+        lost_track = {
             "track_id": tid,
             "label": label,
             "lifetime": lifetime,
             "trajectory": trajectory_full,
             "roi_active": True,
             "direction_state": dsm.state.value,
-        })
+        }
+        self.lost_tracks.append(lost_track)
+        if self.track_ended_callback:
+            self.track_ended_callback(lost_track)
 
     def _check_crossings(
         self,
@@ -331,12 +360,16 @@ class TrackingReporter(BatchMetadataOperator):
                 if alert:
                     alert["track_id"] = track_id
                     alert["frame"] = self.frame_count
+                    alert["label"] = track_state["label"]
+                    alert["channel"] = self.channel_id
                     self.transit_alerts.append(alert)
                     logger.info(
                         "TRANSIT: Track #%d: %s -> %s (%s)",
                         track_id, alert["entry_label"],
                         alert["exit_label"], alert["method"],
                     )
+                    if self.alert_callback:
+                        self.alert_callback(alert)
 
     def summary(self) -> dict:
         """Return summary stats including tracking info."""

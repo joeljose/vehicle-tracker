@@ -37,7 +37,7 @@ def create_app(backend: str = "deepstream") -> FastAPI:
                  "fake" for testing.
     """
     if backend == "deepstream":
-        from backend.pipeline.deepstream.pipeline import DeepStreamPipeline
+        from backend.pipeline.deepstream.adapter import DeepStreamPipeline
         pipeline_backend = DeepStreamPipeline()
     elif backend == "fake":
         from backend.pipeline.fake import FakeBackend

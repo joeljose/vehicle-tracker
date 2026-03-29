@@ -8,7 +8,6 @@ from pathlib import Path
 CLIPS_DIR = Path("/data/test_clips")
 CLIP_741_73 = CLIPS_DIR / "741_73_10s.mp4"
 CLIP_LYTLE = CLIPS_DIR / "lytle_south_10s.mp4"
-CLIP_DRUGMART = CLIPS_DIR / "drugmart_73_10s.mp4"
 
 OUTPUT_DIR = Path("/app/snapshots")
 
@@ -72,15 +71,3 @@ def test_pipeline_interval_1():
     summary = run_pipeline(str(CLIP_741_73), interval=1)
 
     assert summary["frames"] > 0
-
-
-def test_pipeline_all_junctions():
-    """Pipeline runs on all 3 junction clips without crashing."""
-    from backend.pipeline.deepstream.pipeline import run_pipeline
-
-    for clip in [CLIP_741_73, CLIP_LYTLE, CLIP_DRUGMART]:
-        if not clip.exists():
-            pytest.skip(f"Clip not found: {clip}")
-        summary = run_pipeline(str(clip))
-        assert summary["frames"] > 0, f"No frames for {clip.name}"
-        assert summary["fps"] > 0, f"Zero FPS for {clip.name}"

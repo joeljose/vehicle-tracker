@@ -1,5 +1,6 @@
 """In-memory alert storage — transit and stagnant alerts."""
 
+import threading
 import time
 import uuid
 
@@ -18,6 +19,7 @@ class AlertStore:
     """
 
     def __init__(self, fps: float = 30.0):
+        self._lock = threading.Lock()
         self._alerts: dict[str, dict] = {}  # alert_id → full metadata
         self._order: list[str] = []  # alert_ids in insertion order
         self._fps = fps
@@ -38,6 +40,10 @@ class AlertStore:
         Returns:
             Generated alert_id.
         """
+        with self._lock:
+            return self._add_transit_alert(pipeline_alert, channel)
+
+    def _add_transit_alert(self, pipeline_alert: dict, channel: int) -> str:
         alert_id = self._generate_id()
         track_id = pipeline_alert["track_id"]
         duration_frames = pipeline_alert.get("duration_frames", 0)
@@ -97,6 +103,10 @@ class AlertStore:
         Returns:
             Generated alert_id.
         """
+        with self._lock:
+            return self._add_stagnant_alert(pipeline_alert, channel)
+
+    def _add_stagnant_alert(self, pipeline_alert: dict, channel: int) -> str:
         alert_id = self._generate_id()
         track_id = pipeline_alert["track_id"]
         duration_frames = pipeline_alert.get("stationary_duration_frames", 0)
@@ -121,7 +131,8 @@ class AlertStore:
 
     def get_alert(self, alert_id: str) -> dict | None:
         """Get full alert metadata (for GET /alert/{id})."""
-        return self._alerts.get(alert_id)
+        with self._lock:
+            return self._alerts.get(alert_id)
 
     def get_alerts(
         self,
@@ -134,49 +145,55 @@ class AlertStore:
         Summaries exclude per_frame_data and full_trajectory to keep
         the response lightweight for listing and WebSocket push.
         """
-        # Iterate in reverse (newest first)
-        result = []
-        for alert_id in reversed(self._order):
-            alert = self._alerts.get(alert_id)
-            if alert is None:
-                continue
-            if alert_type and alert["type"] != alert_type:
-                continue
-            if channel is not None and alert["channel"] != channel:
-                continue
-            result.append(self._to_summary(alert))
-            if len(result) >= limit:
-                break
-        return result
+        with self._lock:
+            # Iterate in reverse (newest first)
+            result = []
+            for alert_id in reversed(self._order):
+                alert = self._alerts.get(alert_id)
+                if alert is None:
+                    continue
+                if alert_type and alert["type"] != alert_type:
+                    continue
+                if channel is not None and alert["channel"] != channel:
+                    continue
+                result.append(self._to_summary(alert))
+                if len(result) >= limit:
+                    break
+            return result
 
     def get_ws_summary(self, alert_id: str) -> dict | None:
         """Get lightweight WebSocket push summary for an alert."""
-        alert = self._alerts.get(alert_id)
-        if alert is None:
-            return None
-        return self._to_summary(alert)
+        with self._lock:
+            alert = self._alerts.get(alert_id)
+            if alert is None:
+                return None
+            return self._to_summary(alert)
 
     def get_channel_alerts(self, channel: int) -> list[dict]:
         """Get all full alert metadata for a channel (for clip extraction)."""
-        return [a for a in self._alerts.values() if a["channel"] == channel]
+        with self._lock:
+            return [a for a in self._alerts.values() if a["channel"] == channel]
 
     def count_by_channel(self, channel: int) -> int:
         """Count alerts for a specific channel."""
-        return sum(1 for a in self._alerts.values() if a["channel"] == channel)
+        with self._lock:
+            return sum(1 for a in self._alerts.values() if a["channel"] == channel)
 
     def clear_channel(self, channel: int) -> None:
         """Remove all alerts for a channel (Phase 4 teardown)."""
-        to_remove = [
-            aid for aid, a in self._alerts.items() if a["channel"] == channel
-        ]
-        for aid in to_remove:
-            del self._alerts[aid]
-        self._order = [aid for aid in self._order if aid not in set(to_remove)]
+        with self._lock:
+            to_remove = [
+                aid for aid, a in self._alerts.items() if a["channel"] == channel
+            ]
+            for aid in to_remove:
+                del self._alerts[aid]
+            self._order = [aid for aid in self._order if aid not in set(to_remove)]
 
     def clear(self) -> None:
         """Remove all alerts."""
-        self._alerts.clear()
-        self._order.clear()
+        with self._lock:
+            self._alerts.clear()
+            self._order.clear()
 
     @staticmethod
     def _to_summary(alert: dict) -> dict:

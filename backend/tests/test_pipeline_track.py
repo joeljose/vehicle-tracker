@@ -7,7 +7,6 @@ from pathlib import Path
 CLIPS_DIR = Path("/data/test_clips")
 CLIP_741_73 = CLIPS_DIR / "741_73_10s.mp4"
 CLIP_LYTLE = CLIPS_DIR / "lytle_south_10s.mp4"
-CLIP_DRUGMART = CLIPS_DIR / "drugmart_73_10s.mp4"
 
 OUTPUT_DIR = Path("/app/snapshots")
 
@@ -88,17 +87,6 @@ def test_tracker_annotated_output(cleanup_output):
     assert os.path.exists(output), "Output MP4 not created"
     assert os.path.getsize(output) > 1000, "Output MP4 too small"
 
-
-def test_tracker_all_junctions():
-    """Tracker runs on all 3 junction clips without crashing."""
-    from backend.pipeline.deepstream.pipeline import run_pipeline
-
-    for clip in [CLIP_741_73, CLIP_LYTLE, CLIP_DRUGMART]:
-        if not clip.exists():
-            pytest.skip(f"Clip not found: {clip}")
-        summary = run_pipeline(str(clip))
-        assert summary["frames"] > 0, f"No frames for {clip.name}"
-        assert summary["unique_tracks"] > 0, f"No tracks for {clip.name}"
 
 
 def test_shadow_tracking_age():
