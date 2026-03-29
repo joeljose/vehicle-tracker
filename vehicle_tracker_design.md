@@ -418,9 +418,12 @@ def process_frame_batch():
 | Aspect | Detail |
 |---|---|
 | Trigger | Video end (recorded), YouTube Live stream end/drop (after recovery fails), or operator clicks "Stop" |
+| Phase transition | Background clip extraction begins (transit alerts only, NVENC). Review UI opens immediately; clips become available progressively. |
 | Alert feed | Persists — all alerts from Phase 2 remain visible and clickable |
-| Replay (recorded) | Click alert to jump to timestamp in original video. `<video>` element with canvas overlay draws stored per-frame bboxes and trajectory |
-| Replay (YouTube Live) | Frozen last frame displayed as `<img>`. Stored bboxes animated on `<canvas>` overlay at original timing |
+| Replay (transit, recorded) | Click alert to play a short looping clip (entry to exit + padding) with bbox overlay on canvas. Clip pre-extracted at phase transition. Spinner shown if clip not yet ready. |
+| Replay (transit, YouTube Live) | Frozen last frame displayed as `<img>`. Stored bboxes animated on `<canvas>` overlay along stored trajectory at original timing |
+| Replay (stagnant, recorded) | Single full frame extracted at best-photo timestamp with bbox drawn. Static image, no video. |
+| Replay (stagnant, YouTube Live) | Bbox drawn on frozen last frame at vehicle's position. Static image. |
 | Export | Option to render annotated video with fading trajectory overlay (recorded only, uses NVENC) |
 
 ### Phase 4 — Teardown
@@ -873,52 +876,46 @@ MJPEG is chosen for live view because:
 
 The `<canvas>` overlay sits on top of the `<img>` element, pixel-aligned. In Phase 1, the operator draws ROI polygon and entry/exit lines on this canvas. In Phase 2, the canvas is used for any frontend-side overlays (e.g., direction indicators).
 
-### 13.2 Phase 3 Replay — Recorded Video
+### 13.2 Phase 3 Replay — Transit Alert (Recorded Video)
+
+Backend extracts a short clip per transit alert at the Analytics → Review phase transition:
+
+```
+Phase transition (background job):
+  For each transit alert:
+    ffmpeg -ss {first_seen_ts - padding} -to {last_seen_ts + padding} -i {source_file} -c:v h264_nvenc clip_{alert_id}.mp4
+  Clips stored in a temp directory, cleared on channel teardown.
+
+Frontend:
+  <video src="/alert/{alert_id}/replay" loop autoplay>   <-- short clip, loops
+  +
+  <canvas> overlay                                        <-- draws stored per-frame bboxes + trajectory
+```
+
+Clip extraction runs in the background — Review phase opens immediately. Transit alert cards show a spinner until their clip is ready. Clips are 5-15 seconds each (track duration + padding).
+
+**Synchronization:** The clip starts at time 0 which corresponds to `first_seen_timestamp_ms - padding`. The canvas overlay uses `requestVideoFrameCallback()` with `metadata.mediaTime` matched against `timestamp_ms` in `per_frame_data` via binary search. Since the clip is extracted from the same video file, `mediaTime` maps directly to the file's PTS. The `per_frame_data` stores `timestamp_ms` (video PTS in milliseconds) per frame for this mapping.
+
+**Clip storage estimate:** ~800 transit alerts x 5s avg x 1MB = ~1-2GB typical, ~4GB worst case. Cleared on channel teardown (Phase 4).
+
+### 13.3 Phase 3 Replay — Stagnant Alert (Recorded Video)
 
 ```
 Backend:
-  FastAPI serves original video file via HTTP range requests
-  GET /video/{filename}  (Accept-Ranges: bytes)
+  Extract single frame at best-photo timestamp, draw bbox overlay
+  GET /alert/{alert_id}/replay  -->  JPEG image (full frame with bbox)
 
 Frontend:
-  <video src="/video/{filename}">       <-- native HTML5 player with seek/scrub
-  +
-  <canvas> overlay                      <-- draws stored per-frame bboxes + trajectory
+  <img src="/alert/{alert_id}/replay">   <-- static image, no video
 ```
 
-The `<video>` element provides native controls (play, pause, seek, scrub). The `<canvas>` overlay draws stored per-frame bounding boxes synchronized via `requestVideoFrameCallback()`.
+A stagnant vehicle sitting still for 2.5 minutes has no meaningful video to replay. The operator sees the full frame with the vehicle highlighted by a bounding box, plus the metadata (duration, position, best photo).
 
-**Keyframe seeking limitation:** H.264 video can only seek to keyframes (I-frames), which may be 2-5 seconds apart in traffic camera recordings. When seeking to an alert's `first_seen_frame`, the video may land at the nearest prior keyframe. The canvas overlay simply draws nothing until `presentedFrames` matches the first entry in `per_frame_data`, so the user sees raw video for a brief moment before the bbox overlay begins. This is acceptable for v1. If precise seeking is needed in v2, the video can be re-muxed with frequent keyframes during Phase 2 at the cost of disk space.
-
-Synchronization code:
-
-```javascript
-function syncOverlay(video, canvas, alertData) {
-    const ctx = canvas.getContext('2d');
-
-    video.requestVideoFrameCallback(function onFrame(now, metadata) {
-        // Use presentedFrames (monotonic frame count) rather than
-        // mediaTime * fps, which can be inaccurate with non-zero start
-        // times or variable frame rate containers from traffic cameras.
-        const frameNum = metadata.presentedFrames;
-        // Find nearest per_frame_data entry (binary search on frame number)
-        const frameData = findNearestFrame(alertData.per_frame_data, frameNum);
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        if (frameData) {
-            drawBbox(ctx, frameData.bbox);
-            drawTrajectory(ctx, alertData.full_trajectory, frameNum);
-        }
-
-        video.requestVideoFrameCallback(onFrame);
-    });
-}
-```
-
-### 13.3 Phase 3 Replay — YouTube Live (No Original Video)
+### 13.4 Phase 3 Replay — YouTube Live (No Original Video)
 
 Since there is no recorded file for YouTube Live sources, replay uses stored data only:
 
+**Transit alerts:**
 ```
 Frontend:
   <img src="{last_frame_jpeg}">         <-- frozen last frame from stream
@@ -927,6 +924,16 @@ Frontend:
 ```
 
 The canvas animates the stored per-frame bboxes at original timing using `requestAnimationFrame()`. The operator sees the vehicle's tracked path replayed on top of the last captured frame.
+
+**Stagnant alerts:**
+```
+Frontend:
+  <img src="{last_frame_jpeg}">         <-- frozen last frame from stream
+  +
+  <canvas> overlay                      <-- bbox drawn at vehicle's position
+```
+
+Static bbox drawn on the frozen last frame. No animation needed.
 
 ---
 
@@ -939,10 +946,13 @@ Each alert stores per-frame data for every frame the tracked vehicle was active.
 @dataclass
 class FrameRecord:
     frame: int              # frame number (4 bytes)
+    timestamp_ms: int       # video PTS in milliseconds (8 bytes) — from GStreamer buffer PTS
     bbox: tuple[int, int, int, int]  # x, y, w, h (16 bytes)
     centroid: tuple[int, int]        # x, y (8 bytes)
-    # ~28 bytes per record, ~40 bytes with Python object overhead
+    # ~36 bytes per record, ~48 bytes with Python object overhead
 ```
+
+**Note:** `timestamp_ms` is the video file's PTS (presentation timestamp), NOT wall-clock time. For recorded files, this matches the browser's `mediaTime * 1000` in `requestVideoFrameCallback()`. For YouTube Live, PTS from the HLS stream. This field is essential for replay synchronization — see Section 13.2.
 
 **Memory estimation:**
 - Average track duration: ~10 seconds at 30fps = 300 frames
@@ -994,15 +1004,28 @@ def draw_fading_trail(frame: np.ndarray, trajectory: list[Point], current_idx: i
 
 ## 16. Alert Feed UI Design
 
-### 16.1 Layout
+### 16.0 UI Architecture — Tab-Per-Channel
+
+The frontend uses a **tab-per-channel** model:
+
+- **Home page** (`/`): Channel manager. Shows pipeline start/stop button, "Add Channel" form, and text-based status cards per active channel (phase, alert count). No video panels.
+- **Channel tab** (`/channel/{id}`): Opens in a new browser tab. Full phase-driven layout for a single channel. Self-contained: own WebSocket connection, own MJPEG stream, own alert feed.
+
+This eliminates multi-channel layout conflicts — each tab is single-channel, single-phase. The operator focuses on one junction at a time and uses the home page for bird's-eye status.
+
+**Home page state sync:** The home page connects to the WebSocket and listens for `phase_changed` and `pipeline_event` messages. On initial load, it fetches `GET /channels` for current state.
+
+**Tab lifecycle:** Closing a channel tab does not stop the channel — it continues running on the backend. Reopening the tab reconnects the WebSocket and backfills alerts via `GET /alerts?channel={id}`.
+
+### 16.1 Channel Tab Layout
 
 ```
 +------------------------------------------------------------+
 |  Control Panel (top bar)                                    |
 +--------------------------------------------+---------------+
 |                                            |  Alert Feed   |
-|          Video Panels                      |  (~300px)     |
-|     (1-N channels, MJPEG or <video>)       |               |
+|          Video Panel                       |  (~300px)     |
+|     (single channel, MJPEG or replay)      |               |
 |                                            | [Filter: All] |
 |                                            |               |
 |                                            | +--card-----+ |
@@ -1056,14 +1079,21 @@ WebSocket push: lightweight summary
 { alert_id, track_id, class, direction, best_photo_url, timestamp }
         |
         v
-Frontend appends compact card to alert feed
-        |
-        v  (user clicks card)
-GET /alert/{alert_id}  -->  full metadata + per_frame_data
+Frontend appends to in-memory alert array
         |
         v
-Frontend renders expanded view + enables replay
+Virtual scroller (@tanstack/react-virtual) renders only visible cards (~20-30)
+        |
+        v  (user clicks card in Review phase)
+GET /alert/{alert_id}/replay  -->  clip (transit) or frame (stagnant)
+        |
+        v
+Frontend renders replay (clip loop or static frame with bbox)
 ```
+
+**Alert feed loading:** During Analytics, alerts accumulate client-side from WebSocket. On tab reopen or page refresh, `GET /alerts?channel={id}` returns the full alert array (~200-400KB for 1,000-2,000 alerts). No pagination — all alerts loaded into client memory. Virtual scrolling ensures DOM performance regardless of alert count.
+
+**Auto-scroll:** Feed auto-scrolls to newest alert when the user is at the top of the list. If the user has scrolled down, auto-scrolling stops and a "New alerts" badge appears to jump back to the top.
 
 ---
 
@@ -1132,7 +1162,7 @@ Each junction has a saved configuration file. Loaded when the same site is added
 }
 ```
 
-**stats_update** (every 1 second):
+**stats_update** (every 1 second, per channel):
 ```json
 {
   "type": "stats_update",
@@ -1145,6 +1175,8 @@ Each junction has a saved configuration file. Loaded when the same site is added
   "idle_mode": false
 }
 ```
+
+**Implementation:** Emitted from the pipeline frame callback. A time check (`time.time() - last_stats_time >= 1.0`) triggers collection: fps from frame counter / elapsed, active_tracks from tracker dict length, inference_ms from probe timing. No extra thread needed — piggybacks on existing ~30/sec frame callback. ~15 lines of code.
 
 **pipeline_event:**
 ```json
@@ -1211,7 +1243,32 @@ Each junction has a saved configuration file. Loaded when the same site is added
 }
 ```
 
+**phase_changed** (on phase transition):
+```json
+{
+  "type": "phase_changed",
+  "channel": 0,
+  "phase": "review",
+  "previous_phase": "analytics"
+}
+```
+
 ### 18.2 REST Responses
+
+**GET /channels** (home page initial load):
+```json
+{
+  "channels": [
+    {
+      "channel_id": 0,
+      "source": "741_73.mp4",
+      "phase": "analytics",
+      "alert_count": 47
+    }
+  ],
+  "pipeline_started": true
+}
+```
 
 **GET /alert/{alert_id}** (full metadata on demand):
 ```json
@@ -1229,8 +1286,8 @@ Each junction has a saved configuration file. Loaded when the same site is added
   "best_photo_url": "/snapshot/567",
   "full_trajectory": [[470, 338], [473, 340], [476, 341]],
   "per_frame_data": [
-    {"frame": 1001, "bbox": [412, 305, 129, 73], "centroid": [476, 341]},
-    {"frame": 1002, "bbox": [414, 306, 130, 74], "centroid": [479, 343]}
+    {"frame": 1001, "timestamp_ms": 1410, "bbox": [412, 305, 129, 73], "centroid": [476, 341]},
+    {"frame": 1002, "timestamp_ms": 1443, "bbox": [414, 306, 130, 74], "centroid": [479, 343]}
   ],
   "first_seen_frame": 1001,
   "last_seen_frame": 1296,
@@ -1244,7 +1301,7 @@ Each junction has a saved configuration file. Loaded when the same site is added
 }
 ```
 
-**GET /alerts?limit=50&type=transit**:
+**GET /alerts?channel=0&type=transit**:
 ```json
 {
   "alerts": [
@@ -1262,8 +1319,7 @@ Each junction has a saved configuration file. Loaded when the same site is added
       "timestamp_ms": 1711612345000
     }
   ],
-  "total": 127,
-  "has_more": true
+  "total": 127
 }
 ```
 
@@ -1277,9 +1333,10 @@ Each junction has a saved configuration file. Loaded when the same site is added
 |---|---|---|---|---|
 | POST | `/pipeline/start` | — | `{"status": "started"}` | Boots the inference pipeline |
 | POST | `/pipeline/stop` | — | `{"status": "stopped"}` | Stops all inference |
+| GET | `/channels` | — | `{"channels": [...], "pipeline_started": true}` | List all channels with phase, alert count. Used by home page on load. |
 | POST | `/channel/add` | `{"source": "https://youtube.com/watch?v=..." \| "/path/file.mp4"}` | `{"channel_id": 0, "qualities": [...]}` | Adds source, resolves YouTube URL if needed, enters Phase 1 |
-| POST | `/channel/remove` | `{"channel_id": 0}` | `{"status": "removed"}` | Phase 4 teardown |
-| POST | `/channel/{id}/phase` | `{"phase": "setup" \| "analytics" \| "review"}` | `{"status": "ok", "phase": "analytics"}` | Transition channel phase |
+| POST | `/channel/remove` | `{"channel_id": 0}` | `{"status": "removed"}` | Phase 4 teardown, clears extracted clips |
+| POST | `/channel/{id}/phase` | `{"phase": "setup" \| "analytics" \| "review"}` | `{"status": "ok", "phase": "analytics"}` | Transition channel phase. Emits `phase_changed` WS event. Analytics→Review triggers background clip extraction. |
 | PATCH | `/config` | `{"confidence_threshold": 0.5}` | `{"status": "updated"}` | Runtime config update |
 | PATCH | `/channel/{id}/quality` | `{"quality": "720p"}` | `{"status": "updated"}` | Change YouTube stream quality (triggers URL re-extraction) |
 
@@ -1288,14 +1345,14 @@ Each junction has a saved configuration file. Loaded when the same site is added
 | Method | Path | Request Body | Response | Notes |
 |---|---|---|---|---|
 | GET | `/stream/{channel_id}` | — | `multipart/x-mixed-replace` (MJPEG) | Phase 1/2 live stream |
-| GET | `/video/{filename}` | — | Video file (HTTP range requests) | Phase 3 recorded replay |
 
 ### Alerts & Snapshots
 
 | Method | Path | Request Body | Response | Notes |
 |---|---|---|---|---|
-| GET | `/alerts` | Query: `limit`, `type` | Paginated alert summaries | Historical alerts |
+| GET | `/alerts` | Query: `channel`, `type` | Full alert array for channel (no pagination) | Returns all alerts; ~200-400KB for 1,000-2,000 alerts. `channel` filter required for channel tab backfill. |
 | GET | `/alert/{alert_id}` | — | Full alert metadata + per-frame data | On-demand detail |
+| GET | `/alert/{alert_id}/replay` | — | Video clip (transit) or JPEG frame with bbox (stagnant) | Transit: pre-extracted clip, returns 202 if not yet ready. Stagnant: full frame with bbox overlay. |
 | GET | `/snapshot/{track_id}` | — | JPEG image | Best-photo crop |
 | POST | `/video/export` | `{"channel_id": 0}` | `{"status": "exporting", "job_id": "..."}` | Annotated video export (recorded only) |
 
@@ -1303,7 +1360,7 @@ Each junction has a saved configuration file. Loaded when the same site is added
 
 | Method | Path | Request Body | Response | Notes |
 |---|---|---|---|---|
-| POST | `/site/config` | Site config JSON (see Section 17) | `{"status": "saved"}` | Save ROI, lines, labels |
+| POST | `/site/config` | `SiteConfigRequest` Pydantic model (see Section 17) | `{"status": "saved"}` | Validated: site_id, roi_polygon (min 3 vertices), entry_exit_lines with label+start+end per arm |
 | GET | `/site/config` | Query: `site_id` | Site config JSON | Load config |
 | GET | `/site/configs` | — | `{"sites": ["741_73", "drugmart_73", ...]}` | List saved configs |
 
@@ -1311,7 +1368,11 @@ Each junction has a saved configuration file. Loaded when the same site is added
 
 | Path | Direction | Messages |
 |---|---|---|
-| GET `/ws?channels=0,1` | Server -> Client | `frame_data`, `stats_update`, `pipeline_event`, `track_ended`, `transit_alert`, `stagnant_alert`. Optional `channels` query param filters to specific channels server-side. If omitted, all channels are streamed. |
+| GET `/ws?channels=0,1&types=transit_alert,stagnant_alert,stats_update,pipeline_event,phase_changed` | Server -> Client | `frame_data`, `stats_update`, `pipeline_event`, `phase_changed`, `track_ended`, `transit_alert`, `stagnant_alert`. Optional `channels` query param filters to specific channels server-side. Optional `types` query param filters message types server-side — only subscribed types are sent over the wire. If omitted, all channels/types are streamed. |
+
+**M3 WebSocket subscriptions:**
+- Home page: `?types=pipeline_event,phase_changed` (no channel filter — receives all channels)
+- Channel tab: `?channels={id}&types=transit_alert,stagnant_alert,stats_update,pipeline_event,phase_changed` (no `frame_data` — annotations baked into MJPEG)
 
 ---
 
@@ -1321,7 +1382,7 @@ Each junction has a saved configuration file. Loaded when the same site is added
 
 ```
 backend/
-├── main.py                        # FastAPI app, uvicorn entrypoint
+├── main.py                        # FastAPI app, uvicorn entrypoint, CORSMiddleware (allow localhost:5173)
 ├── pipeline/
 │   ├── deepstream/                # DeepStream pipeline (primary, M1-M2)
 │   │   ├── pipeline.py            # GStreamer pipeline construction + element linking
@@ -1361,19 +1422,32 @@ backend/
 ```
 frontend/src/
 ├── api/
-│   ├── rest.js                    # Axios wrappers for all REST endpoints
-│   └── stream.js                  # WebSocket singleton, event emitter, reconnect logic
+│   ├── rest.js                    # fetch wrappers for all REST endpoints
+│   └── ws.js                      # WebSocket singleton, event emitter, reconnect logic, types filter
+├── contexts/
+│   ├── ChannelContext.jsx          # Per-channel tab: phase, channel_id, source, pipeline status
+│   ├── AlertContext.jsx            # Per-channel tab: alert array, filters
+│   └── HomeContext.jsx             # Home page: channel list, pipeline status
+├── pages/
+│   ├── Home.jsx                   # Channel manager: add channel, status cards, pipeline start/stop
+│   └── Channel.jsx                # Channel tab: phase-driven layout for single channel
 ├── components/
-│   ├── ControlPanel/              # Channel management, phase controls, config sliders
-│   ├── VideoPanel/                # MJPEG <img> (Phase 1/2), <video>+canvas (Phase 3)
-│   ├── StatsBar/                  # FPS, track count, inference ms, phase indicator
-│   ├── AlertFeed/                 # Right sidebar: compact cards, filters, expand on click
-│   └── DrawingTools/              # ROI polygon + entry/exit line drawing on canvas overlay
+│   ├── ControlPanel/              # Phase controls, config sliders (channel tab only)
+│   ├── VideoPanel/                # MJPEG <img> (Phase 1/2), clip <video>+canvas (Phase 3 transit)
+│   ├── StatsBar/                  # FPS, track count, inference ms — from stats_update WS messages
+│   ├── AlertFeed/                 # Right sidebar: virtual-scrolled cards (@tanstack/react-virtual), filters
+│   ├── DrawingTools/              # ROI polygon + entry/exit line drawing on raw canvas overlay
+│   └── ReplayView/                # Transit: looping clip + bbox canvas. Stagnant: full frame + bbox.
 ├── widgets/
 │   ├── TrajectoryWidget/          # Fading centroid trails on canvas
-│   └── TrackCountChart/           # Rolling time-series of active vehicle count
-└── layouts/                       # Saved layout JSON configs
+│   └── TrackCountChart/           # Rolling time-series of active vehicle count (from stats_update)
+└── lib/
+    └── coords.js                  # Canvas coordinate mapping: object-fit:contain offset calc, original↔display conversion
 ```
+
+**Tech stack:** React + Vite, shadcn/ui + Tailwind CSS (dark mode), @tanstack/react-virtual (alert feed), Recharts (charts), Lucide (icons). Native fetch (no Axios). State management via React Context + useReducer (two contexts per channel tab, one for home page).
+
+**Drawing tools coordinate system:** All points stored in original pixel space (e.g., 1920x1080). Mouse clicks converted immediately using `object-fit: contain` geometry (letterbox offset + scale). Canvas re-renders on resize via ResizeObserver — no coordinate recalculation. See `lib/coords.js`.
 
 ---
 

@@ -226,66 +226,79 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-58 | `POST /pipeline/start` -- start the pipeline | Must |
 | F-59 | `POST /pipeline/stop` -- stop the pipeline and clean up GPU resources | Must |
 | F-60 | `POST /channel/add` -- add a new source channel (`{ source: "https://youtube.com/watch?v=..." \| "/path/file.mp4" }`) | Must |
-| F-61 | `POST /channel/remove` -- remove a channel (`{ channel_id: 0 }`) | Must |
-| F-62 | `POST /channel/{id}/phase` -- transition a channel's phase (`{ phase: "setup" \| "analytics" \| "review" }`) | Must |
+| F-61 | `POST /channel/remove` -- remove a channel (`{ channel_id: 0 }`). Clears extracted clips. | Must |
+| F-62 | `POST /channel/{id}/phase` -- transition a channel's phase. Emits `phase_changed` WS event. Analytics→Review triggers background clip extraction. | Must |
 | F-63 | `PATCH /config` -- update runtime parameters (e.g., confidence threshold) | Must |
 | F-64 | `GET /stream/{channel_id}` -- MJPEG annotated video stream (Phase 1 and 2) | Must |
-| F-65 | `GET /video/{filename}` -- serve recorded video with HTTP range requests (Phase 3) | Must |
-| F-66 | `GET /alerts?limit=50&type=transit\|stagnant` -- recent alerts, summary format, paginated | Must |
-| F-67 | `GET /alert/{alert_id}` -- full alert metadata including per-frame bounding box data | Must |
+| F-65 | `GET /channels` -- list all channels with phase and alert count (home page) | Must |
+| F-66 | `GET /alerts?channel={id}&type=transit\|stagnant` -- full alert array for channel, no pagination (~200-400KB) | Must |
+| F-67 | `GET /alert/{alert_id}` -- full alert metadata including per-frame bounding box data (with `timestamp_ms` per frame for replay sync) | Must |
+| F-67b | `GET /alert/{alert_id}/replay` -- transit: pre-extracted clip (202 if not ready), stagnant: full frame with bbox JPEG | Must |
 | F-68 | `GET /snapshot/{track_id}` -- best-photo JPEG for a given track | Must |
-| F-69 | `POST /site/config` -- save site configuration (ROI, lines, labels) | Must |
+| F-69 | `POST /site/config` -- save site configuration via validated Pydantic model (ROI, lines, labels) | Must |
 | F-70 | `GET /site/config` -- load current site configuration | Must |
 | F-71 | `GET /site/configs` -- list all saved site configurations | Should |
-| F-72 | `POST /channel/{id}/seek` -- seek to a specific frame (Phase 3 replay) | Should |
 | F-73 | `POST /video/export` -- render annotated video with stored overlays (recorded only) | Should |
-| F-74 | `GET /ws?channels=0,1` -- WebSocket endpoint streaming: `frame_data`, `stats_update`, `pipeline_event`, `track_ended`, `transit_alert`, `stagnant_alert`. Optional `channels` query param filters to specific channels server-side; if omitted, all channels streamed. | Must |
+| F-74 | `GET /ws?channels=0,1&types=...` -- WebSocket with optional `channels` and `types` server-side filters. Types: `frame_data`, `stats_update`, `pipeline_event`, `phase_changed`, `track_ended`, `transit_alert`, `stagnant_alert`. M3 frontend subscribes without `frame_data`. | Must |
 
 ### 8.12 UI -- Core
 
-**Layout:** Phase-driven UI. The main content area adapts to the current phase (Setup / Analytics / Review). Video panel and alert feed are always side-by-side (required for Review replay). Phase indicator at the top serves as navigation.
+**Architecture:** Tab-per-channel model. Home page (`/`) is the channel manager — pipeline start/stop, add channel, text status cards per channel. Each channel opens in its own browser tab (`/channel/{id}`) with the full phase-driven layout. Eliminates multi-channel layout conflicts.
+
+**Layout:** Phase-driven UI per channel tab. The main content area adapts to the current phase (Setup / Analytics / Review). Video panel and alert feed are always side-by-side. Phase indicator at the top serves as navigation.
 
 **Design:** Dark mode default (monitoring dashboard standard). shadcn/ui + Tailwind CSS component library. Color scheme: background `#0f1117`, cards `#1a1d23`, transit=blue `#60a5fa`, stagnant=amber `#fbbf24`, active=green `#4ade80`, error=red `#f87171`.
+
+**State management:** React Context + useReducer. Two contexts per channel tab (ChannelContext, AlertContext), one for home page (HomeContext). No external state library.
 
 **Best-photo thumbnails:** Always square (long_side × long_side). Vehicle occupies ≥50% of visible area. Scene expansion for context, black padding for edge cases and remaining gap.
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-75 | Control panel allows adding and removing source channels (YouTube Live URL or file path) | Must |
-| F-76 | Control panel allows starting and stopping the pipeline | Must |
-| F-77 | Control panel exposes a confidence threshold slider that updates the backend in real time | Must |
-| F-78 | Phase indicator displayed per channel showing current phase (Setup / Analytics / Review). Acts as top-level navigation -- UI content adapts to current phase. | Must |
-| F-79 | Start/Stop Analytics button per channel for phase transitions | Must |
-| F-80 | UI renders one video panel per active channel dynamically -- no hardcoded panel count | Must |
+| F-75 | Home page allows adding and removing source channels (YouTube Live URL or file path) | Must |
+| F-76 | Home page allows starting and stopping the pipeline | Must |
+| F-77 | Channel tab exposes a confidence threshold slider that updates the backend in real time | Must |
+| F-78 | Phase indicator displayed in channel tab showing current phase (Setup / Analytics / Review). Acts as top-level navigation -- UI content adapts to current phase. | Must |
+| F-79 | Start/Stop Analytics button in channel tab for phase transitions | Must |
+| F-80 | Each channel opens in its own browser tab with a single video panel -- tab-per-channel model | Must |
 | F-81 | Video panel renders MJPEG via `<img>` tag during Setup and Analytics phases | Must |
-| F-82 | Video panel renders `<video>` element with `<canvas>` overlay for Review phase (recorded video) | Must |
-| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for Review phase (YouTube Live) | Must |
-| F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Setup phase | Must |
-| F-85 | Stats bar below video shows fps, active track count, and inference latency per channel (Analytics phase) | Must |
-| F-86 | UI connects to the backend WebSocket on load and reconnects automatically on drop | Must |
+| F-82 | Video panel renders looping clip via `<video>` with `<canvas>` overlay for transit alert Review (recorded video). Clips pre-extracted at phase transition, spinner if not yet ready. | Must |
+| F-83 | Video panel renders frozen last frame as `<img>` with animated `<canvas>` overlay for transit alert Review (YouTube Live) | Must |
+| F-82b | Stagnant alert Review (recorded): full frame with bbox overlay as static `<img>` | Must |
+| F-83b | Stagnant alert Review (YouTube Live): bbox drawn on frozen last frame as static `<img>` | Must |
+| F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Setup phase. Coordinates stored in original pixel space, converted via object-fit:contain geometry. | Must |
+| F-85 | Stats bar below video shows fps, active track count, and inference latency (from `stats_update` WS messages, Analytics phase) | Must |
+| F-86 | Channel tab connects to backend WebSocket with `types` filter (no `frame_data`) and reconnects automatically on drop. Home page connects with `types=pipeline_event,phase_changed`. | Must |
 | F-100 | Alert feed only shows completed events (transit alerts, stagnant alerts) -- not raw detections or active tracks. Active tracking is visible in the video panel. | Must |
+| F-101 | Home page shows text status cards per channel: source name, current phase, alert count. Updated via `phase_changed` WS events. | Must |
+| F-102 | Home page fetches `GET /channels` on load for initial state. | Must |
+| F-103 | CORS middleware on backend to allow frontend (localhost:5173) requests. | Must |
 
 ### 8.13 UI -- Alert Feed
 
 | ID | Requirement | Priority |
 |---|---|---|
-| F-87 | Alert feed displayed as a persistent right sidebar, approximately 300 px wide | Must |
+| F-87 | Alert feed displayed as a persistent right sidebar in channel tab, approximately 300 px wide | Must |
 | F-88 | Compact alert cards showing: square thumbnail (best photo), direction labels, track ID, duration, method, relative timestamp. Minimal format — feed must be scannable at high alert rates. | Must |
 | F-89 | Stagnant alerts visually distinguished with amber/yellow highlight (transit = blue, stagnant = amber) | Must |
-| F-90 | Filter buttons at top of feed: All, Transit, Stagnant | Must |
+| F-90 | Filter buttons at top of feed: All, Transit, Stagnant (client-side filtering, all alerts in memory) | Must |
 | F-91 | Alert cards are read-only during Analytics phase (no click interaction). Clickable only during Review phase (after analytics stops or video ends). | Must |
-| F-92 | Click an alert during Review (recorded): video panel jumps to that timestamp and replays segment with stored bounding box overlay via `requestVideoFrameCallback()` | Must |
-| F-93 | Click an alert during Review (YouTube Live): animated bounding box replays on frozen last frame at original timing | Must |
-| F-99 | Alert feed auto-scrolls to newest when user is at the top. If user has scrolled down, stop auto-scrolling and show a "↑ New alerts" badge to jump back. | Must |
+| F-92 | Click a transit alert during Review (recorded): play pre-extracted clip loop with bbox overlay via `requestVideoFrameCallback()` + `mediaTime` sync | Must |
+| F-93 | Click a transit alert during Review (YouTube Live): animated bounding box replays on frozen last frame at original timing | Must |
+| F-92b | Click a stagnant alert during Review (recorded): show full frame with bbox at best-photo timestamp | Must |
+| F-93b | Click a stagnant alert during Review (YouTube Live): show bbox on frozen last frame | Must |
+| F-99 | Alert feed auto-scrolls to newest when user is at the top. If user has scrolled down, stop auto-scrolling and show a "New alerts" badge to jump back. | Must |
+| F-104 | Alert feed uses virtual scrolling (@tanstack/react-virtual) to render only visible cards. Handles 1,000-2,000 alerts without DOM performance issues. | Must |
+| F-105 | On tab open/reopen, backfill alerts via `GET /alerts?channel={id}` (full array, no pagination). | Must |
 
 ### 8.14 UI -- Widgets (v1 Scope)
 
 | ID | Requirement | Priority |
 |---|---|---|
 | F-94 | Alert feed sidebar (described in 8.13) | Must |
-| F-95 | ROI polygon and entry/exit line drawing tool with canvas interaction during Phase 1 | Must |
+| F-95 | ROI polygon and entry/exit line drawing tool with raw canvas overlay during Phase 1. Coordinates in original pixel space, ResizeObserver for responsive redraw. | Must |
 | F-96 | Fading trajectory overlay -- centroid trails with configurable fade length, drawn on the video panel canvas | Should |
-| F-97 | Live track count chart -- rolling time-series of active vehicle count per channel | Should |
+| F-97 | Live track count chart -- rolling time-series of active vehicle count per channel (from `stats_update`) | Should |
 | F-98 | All other widgets (confidence histogram, speed estimator, zone counter, heatmap, track timeline, headless replay, alert rules) are deferred to v2 | -- |
 
 ---
