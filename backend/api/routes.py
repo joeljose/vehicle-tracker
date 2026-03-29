@@ -1,9 +1,9 @@
 """Pipeline control REST endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
-from backend.api.deps import get_alert_store, get_backend
+from backend.api.deps import get_alert_store, get_backend, get_clip_extractor
 from backend.api.models import (
     AddChannelRequest,
     ChannelAddedResponse,
@@ -17,6 +17,7 @@ from backend.api.models import (
 import backend.config.site_config as site_config_mod
 from backend.config.site_config import SiteConfig
 from backend.pipeline.alerts import AlertStore
+from backend.pipeline.clip_extractor import ClipExtractor
 from backend.pipeline.protocol import ChannelPhase, PipelineBackend
 
 router = APIRouter()
@@ -66,6 +67,7 @@ def stop_pipeline(
     request: Request,
     backend: PipelineBackend = Depends(get_backend),
     alert_store: AlertStore = Depends(get_alert_store),
+    clip_extractor: ClipExtractor = Depends(get_clip_extractor),
 ):
     try:
         backend.stop()
@@ -73,6 +75,7 @@ def stop_pipeline(
         raise HTTPException(status_code=409, detail="Pipeline not started")
     request.app.state.pipeline_started = False
     request.app.state.next_channel_id = 0
+    clip_extractor.cleanup_all()
     alert_store.clear()
     request.app.state.ws.enqueue({
         "type": "pipeline_event",
@@ -121,11 +124,13 @@ def remove_channel(
     body: RemoveChannelRequest,
     backend: PipelineBackend = Depends(get_backend),
     alert_store: AlertStore = Depends(get_alert_store),
+    clip_extractor: ClipExtractor = Depends(get_clip_extractor),
 ):
     try:
         backend.remove_channel(body.channel_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Channel not found")
+    clip_extractor.cleanup_channel(body.channel_id)
     alert_store.clear_channel(body.channel_id)
     return StatusResponse(status="removed")
 
@@ -136,6 +141,8 @@ def set_channel_phase(
     body: SetPhaseRequest,
     request: Request,
     backend: PipelineBackend = Depends(get_backend),
+    alert_store: AlertStore = Depends(get_alert_store),
+    clip_extractor: ClipExtractor = Depends(get_clip_extractor),
 ):
     try:
         phase = ChannelPhase(body.phase)
@@ -149,6 +156,13 @@ def set_channel_phase(
         backend.set_channel_phase(channel_id, phase)
     except KeyError:
         raise HTTPException(status_code=404, detail="Channel not found")
+
+    # Trigger clip extraction on analytics → review transition
+    if previous == ChannelPhase.ANALYTICS and phase == ChannelPhase.REVIEW:
+        source = backend.channels.get(channel_id, "")
+        alerts = alert_store.get_channel_alerts(channel_id)
+        clip_extractor.extract_clips(channel_id, source, alerts)
+
     request.app.state.ws.enqueue({
         "type": "phase_changed",
         "channel": channel_id,
@@ -189,6 +203,46 @@ def get_alert(
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
+
+
+@router.get("/alert/{alert_id}/replay")
+def get_replay(
+    alert_id: str,
+    alert_store: AlertStore = Depends(get_alert_store),
+    clip_extractor: ClipExtractor = Depends(get_clip_extractor),
+):
+    alert = alert_store.get_alert(alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    status = clip_extractor.get_status(alert_id)
+
+    # Clip not yet extracted (phase transition hasn't happened or not started)
+    if status is None:
+        return JSONResponse(
+            status_code=202,
+            content={"status": "not_started", "alert_id": alert_id},
+        )
+
+    if status == "pending":
+        return JSONResponse(
+            status_code=202,
+            content={"status": "extracting", "alert_id": alert_id},
+        )
+
+    if status == "failed":
+        raise HTTPException(status_code=500, detail="Clip extraction failed")
+
+    # status == "ready"
+    clip_path = clip_extractor.get_clip_path(alert_id)
+    if clip_path is None or not clip_path.exists():
+        raise HTTPException(status_code=500, detail="Clip file not found")
+
+    if alert["type"] == "stagnant_alert":
+        return FileResponse(clip_path, media_type="image/jpeg")
+
+    # Transit alert — return video with range request support
+    return FileResponse(clip_path, media_type="video/mp4")
 
 
 @router.get("/snapshot/{track_id}")
