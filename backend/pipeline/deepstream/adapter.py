@@ -299,7 +299,8 @@ class DeepStreamPipeline:
         ).infer(PGIE_CONFIG, interval=self._inference_interval)
         infer_element_name = infer_flow._streams[0]
 
-        # Enable file looping on the source element for preview
+        # Enable file looping on the source element for preview.
+        # nvurisrcbin supports file-loop natively.
         try:
             src = pipeline["batch_capture-source-0_0"]
             src.set({"file-loop": True})
@@ -464,17 +465,13 @@ class DeepStreamPipeline:
 
         state.pipeline = pipeline
 
-        # EOS handler: auto-transition to Review
-        def on_message(bus, message):
-            from gi.repository import Gst
-            if message.type == Gst.MessageType.EOS:
+        # EOS handler: auto-transition to Review via start_with_callback
+        def on_message(message):
+            if "EOS" in str(message) or "eos" in str(message):
                 logger.info("Analytics EOS on channel %d", channel_id)
                 self._safe_callback(self._on_eos, channel_id)
 
-        pipeline.get_bus().add_signal_watch()
-        pipeline.get_bus().connect("message", on_message)
-
-        pipeline.start()
+        pipeline._instance.start_with_callback(on_message)
         logger.info("Analytics pipeline started for channel %d", channel_id)
 
     def _on_eos(self, channel_id: int) -> None:
@@ -504,11 +501,30 @@ class DeepStreamPipeline:
                 for tid in list(state.reporter.active_tracks):
                     state.best_photo.save(tid, state.reporter.snapshot_dir)
 
-        try:
-            state.pipeline.stop()
-        except Exception as e:
-            logger.warning("Error stopping pipeline for channel %d: %s",
-                          channel_id, e)
+        pipeline = state.pipeline
         state.pipeline = None
         state.reporter = None
-        logger.debug("Pipeline stopped for channel %d", channel_id)
+
+        # pyservicemaker's pipeline.stop() triggers C++ terminate() when
+        # called while an asyncio event loop is running (GLib main loop
+        # conflict). Workaround: disable file-loop so the pipeline will
+        # naturally reach EOS, then call stop() from a background thread
+        # after EOS arrives. The pipeline object is released immediately
+        # so the adapter can build a new pipeline for the next phase.
+        import threading as _threading
+
+        try:
+            src = pipeline["batch_capture-source-0_0"]
+            src.set({"file-loop": False})
+        except Exception:
+            pass
+
+        def _deferred_stop():
+            try:
+                pipeline.wait()  # blocks until EOS
+                pipeline.stop()
+            except Exception:
+                pass
+
+        _threading.Thread(target=_deferred_stop, daemon=True).start()
+        logger.debug("Pipeline stop initiated for channel %d", channel_id)
