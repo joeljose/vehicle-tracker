@@ -13,6 +13,8 @@ from backend.api.models import (
     StatusResponse,
     UpdateConfigRequest,
 )
+import backend.config.site_config as site_config_mod
+from backend.config.site_config import SiteConfig
 from backend.pipeline.alerts import AlertStore
 from backend.pipeline.protocol import ChannelPhase, PipelineBackend
 
@@ -147,3 +149,44 @@ def get_snapshot(
     if jpeg is None:
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return Response(content=jpeg, media_type="image/jpeg")
+
+
+@router.post("/site/config", response_model=StatusResponse)
+def save_site(body: dict):
+    site_id = body.get("site_id")
+    if not site_id:
+        raise HTTPException(status_code=422, detail="site_id is required")
+    roi = [tuple(p) for p in body.get("roi_polygon", [])]
+    if len(roi) < 3:
+        raise HTTPException(
+            status_code=422, detail="ROI polygon must have at least 3 vertices"
+        )
+    config = SiteConfig(
+        site_id=site_id,
+        roi_polygon=roi,
+        entry_exit_lines=body.get("entry_exit_lines", {}),
+    )
+    site_config_mod.save_site_config(config, site_config_mod.SITES_DIR)
+    return StatusResponse(status="saved")
+
+
+@router.get("/site/config")
+def load_site(site_id: str = Query()):
+    try:
+        config = site_config_mod.load_site_config(site_id, site_config_mod.SITES_DIR)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Site config not found")
+    return {
+        "site_id": config.site_id,
+        "roi_polygon": [list(p) for p in config.roi_polygon],
+        "entry_exit_lines": config.entry_exit_lines,
+    }
+
+
+@router.get("/site/configs")
+def list_sites():
+    sites_dir = site_config_mod.SITES_DIR
+    if not sites_dir.exists():
+        return {"sites": []}
+    sites = [f.stem for f in sorted(sites_dir.glob("*.json"))]
+    return {"sites": sites}
