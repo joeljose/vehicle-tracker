@@ -15,9 +15,9 @@ def sites_dir(tmp_path, monkeypatch):
 
 VALID_CONFIG = {
     "site_id": "test_junction",
-    "roi_polygon": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]],
+    "roi_polygon": [[100, 200], [300, 400], [500, 600], [700, 800]],
     "entry_exit_lines": {
-        "north": {"start": [100, 50], "end": [200, 50]},
+        "north": {"label": "741-North", "start": [100, 50], "end": [200, 50]},
     },
 }
 

@@ -32,6 +32,10 @@ def test_full_api_lifecycle(client, app):
     resp = client.post("/channel/1/phase", json={"phase": "analytics"})
     assert resp.json()["phase"] == "analytics"
 
+    # Drain phase_changed events from WS queue
+    while not ws_broadcaster._queue.empty():
+        ws_broadcaster._queue.get_nowait()
+
     # -- 4. Update config --
     resp = client.patch("/config", json={"confidence_threshold": 0.6})
     assert resp.status_code == 200
@@ -43,11 +47,13 @@ def test_full_api_lifecycle(client, app):
 
     # MJPEG subscriber got the frame
     assert mjpeg_q.get_nowait() == b"\xff\xd8frame1"
-    # WS broadcaster got frame_data
-    ws_msg = ws_broadcaster._queue.get_nowait()
-    assert ws_msg["type"] == "frame_data"
-    assert ws_msg["channel"] == 0
-    assert ws_msg["frame"] == 1
+    # WS broadcaster got frame_data (may also get stats_update)
+    ws_msgs = []
+    while not ws_broadcaster._queue.empty():
+        ws_msgs.append(ws_broadcaster._queue.get_nowait())
+    frame_msg = next(m for m in ws_msgs if m["type"] == "frame_data")
+    assert frame_msg["channel"] == 0
+    assert frame_msg["frame"] == 1
 
     # -- 6. Simulate alert emission → AlertStore + WS --
     backend.emit_alert({
@@ -132,8 +138,8 @@ def test_site_config_round_trip(client, monkeypatch, tmp_path):
         "site_id": "741_73",
         "roi_polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
         "entry_exit_lines": {
-            "north": {"start": [100, 50], "end": [200, 50]},
-            "south": {"start": [100, 350], "end": [200, 350]},
+            "north": {"label": "741-North", "start": [100, 50], "end": [200, 50]},
+            "south": {"label": "741-South", "start": [100, 350], "end": [200, 350]},
         },
     }
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import queue
+import time
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -23,10 +24,14 @@ class WsBroadcaster:
     """
 
     def __init__(self):
-        # (websocket, channel_filter) — None means all channels
-        self._clients: list[tuple[WebSocket, set[int] | None]] = []
+        # (websocket, channel_filter, type_filter) — None means all
+        self._clients: list[tuple[WebSocket, set[int] | None, set[str] | None]] = []
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._drain_task: asyncio.Task | None = None
+        # Stats tracking for stats_update (per channel)
+        self._stats_last_emit: dict[int, float] = {}  # channel_id -> last emit time
+        self._stats_frame_count: dict[int, int] = {}  # channel_id -> frames since last emit
+        self._stats_inference_ms_sum: dict[int, float] = {}  # channel_id -> sum for avg
 
     async def start(self) -> None:
         """Start the background drain task."""
@@ -42,14 +47,19 @@ class WsBroadcaster:
                 pass
             self._drain_task = None
 
-    async def connect(self, ws: WebSocket, channels: set[int] | None) -> None:
+    async def connect(
+        self,
+        ws: WebSocket,
+        channels: set[int] | None,
+        types: set[str] | None = None,
+    ) -> None:
         """Accept a WebSocket and register it for broadcasts."""
         await ws.accept()
-        self._clients.append((ws, channels))
+        self._clients.append((ws, channels, types))
 
     def disconnect(self, ws: WebSocket) -> None:
         """Remove a WebSocket from the client list."""
-        self._clients = [(w, c) for w, c in self._clients if w is not ws]
+        self._clients = [(w, c, t) for w, c, t in self._clients if w is not ws]
 
     def enqueue(self, message: dict) -> None:
         """Thread-safe: put a message on the broadcast queue."""
@@ -58,7 +68,7 @@ class WsBroadcaster:
     # -- Pipeline callbacks (called from pipeline thread) --
 
     def on_frame(self, result: FrameResult) -> None:
-        """Convert FrameResult to frame_data WS message."""
+        """Convert FrameResult to frame_data WS message and emit stats_update."""
         msg = {
             "type": "frame_data",
             "channel": result.channel_id,
@@ -76,6 +86,7 @@ class WsBroadcaster:
             ],
         }
         self.enqueue(msg)
+        self._maybe_emit_stats(result)
 
     def on_alert(self, alert: dict) -> None:
         """Forward an alert dict (already has 'type' field) to WS clients."""
@@ -84,6 +95,35 @@ class WsBroadcaster:
     def on_track_ended(self, track: dict) -> None:
         """Forward a track_ended dict to WS clients."""
         self.enqueue(track)
+
+    def _maybe_emit_stats(self, result: FrameResult) -> None:
+        """Emit stats_update every 1 second per channel."""
+        ch = result.channel_id
+        now = time.monotonic()
+        last = self._stats_last_emit.get(ch, 0.0)
+        self._stats_frame_count[ch] = self._stats_frame_count.get(ch, 0) + 1
+        self._stats_inference_ms_sum[ch] = (
+            self._stats_inference_ms_sum.get(ch, 0.0) + result.inference_ms
+        )
+        if now - last >= 1.0:
+            frames = self._stats_frame_count[ch]
+            elapsed = now - last if last > 0 else 1.0
+            fps = round(frames / elapsed, 1)
+            avg_inference = round(
+                self._stats_inference_ms_sum[ch] / frames, 1
+            ) if frames > 0 else 0.0
+            self.enqueue({
+                "type": "stats_update",
+                "channel": ch,
+                "fps": fps,
+                "active_tracks": len(result.detections),
+                "inference_ms": avg_inference,
+                "phase": result.phase,
+                "idle_mode": result.idle_mode,
+            })
+            self._stats_last_emit[ch] = now
+            self._stats_frame_count[ch] = 0
+            self._stats_inference_ms_sum[ch] = 0.0
 
     # -- Internal --
 
@@ -100,14 +140,20 @@ class WsBroadcaster:
     async def _broadcast(self, message: dict) -> None:
         """Send a message to all matching connected clients."""
         msg_channel = message.get("channel")
+        msg_type = message.get("type")
         text = json.dumps(message)
         dead: list[WebSocket] = []
-        for ws, channel_filter in self._clients:
+        for ws, channel_filter, type_filter in self._clients:
             # Channel filtering: skip if client subscribed to specific channels
             # and this message has a channel that doesn't match.
             # Messages without a channel (e.g. pipeline_event) go to everyone.
             if channel_filter is not None and msg_channel is not None:
                 if msg_channel not in channel_filter:
+                    continue
+            # Type filtering: skip if client subscribed to specific types
+            # and this message type doesn't match.
+            if type_filter is not None and msg_type is not None:
+                if msg_type not in type_filter:
                     continue
             try:
                 await ws.send_text(text)
@@ -128,7 +174,13 @@ async def websocket_endpoint(ws: WebSocket):
     if channels_param:
         channel_filter = {int(c) for c in channels_param.split(",") if c.strip()}
 
-    await broadcaster.connect(ws, channel_filter)
+    # Parse optional type filter from query params
+    types_param = ws.query_params.get("types")
+    type_filter: set[str] | None = None
+    if types_param:
+        type_filter = {t.strip() for t in types_param.split(",") if t.strip()}
+
+    await broadcaster.connect(ws, channel_filter, type_filter)
     try:
         while True:
             # Keep connection alive — client doesn't send meaningful data

@@ -39,6 +39,9 @@ class FrameResult:
     timestamp_ms: int
     detections: list[Detection]
     annotated_jpeg: bytes | None  # MJPEG frame with overlays baked in
+    inference_ms: float = 0.0
+    phase: str = "setup"
+    idle_mode: bool = False
 
 
 class PipelineBackend(Protocol):
@@ -47,6 +50,8 @@ class PipelineBackend(Protocol):
     The API layer uses this Protocol exclusively. It never imports
     concrete pipeline classes (DeepStreamPipeline, CustomPipeline).
     """
+
+    channels: dict[int, str]  # channel_id -> source
 
     def start(self) -> None:
         """Boot the inference pipeline (load model, allocate GPU resources)."""
