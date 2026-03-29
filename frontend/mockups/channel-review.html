@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Channel 0 — Review</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#0f1117',
+            surface: '#1a1d23',
+            border: '#2a2d35',
+            'text-primary': '#e1e1e1',
+            'text-secondary': '#9ca3af',
+            'transit-blue': '#60a5fa',
+            'stagnant-amber': '#fbbf24',
+            'active-green': '#4ade80',
+            'error-red': '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+</head>
+<body class="bg-background text-text-primary min-h-screen flex flex-col">
+
+  <!-- Control Bar -->
+  <div class="bg-surface border-b border-border px-4 py-2.5 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-4">
+      <a href="home.html" class="text-text-secondary hover:text-text-primary transition-colors text-sm flex items-center gap-1.5">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Home
+      </a>
+      <div class="h-4 w-px bg-border"></div>
+      <span class="text-sm font-semibold">Channel 0</span>
+      <span class="text-text-secondary text-xs truncate max-w-[200px]">/data/lytle_south.mp4</span>
+    </div>
+
+    <div class="flex items-center gap-1 bg-background rounded-lg p-0.5">
+      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary transition-colors">Setup</button>
+      <button class="px-3 py-1.5 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary transition-colors">Analytics</button>
+      <button class="px-3 py-1.5 text-xs font-medium rounded-md bg-active-green/10 text-active-green">Review</button>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <span class="text-text-secondary text-xs">47 transit · 3 stagnant</span>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="flex flex-1 min-h-0">
+
+    <!-- Replay Panel (left) -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- Replay area -->
+      <div class="flex-1 relative bg-black flex items-center justify-center">
+        <div class="relative" style="width: 960px; height: 540px; background: #111;">
+          <!-- Replay clip or frame -->
+          <div class="absolute inset-0 bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
+            <span class="text-text-secondary text-sm">Transit Replay — car #142</span>
+          </div>
+
+          <!-- Replay bbox overlay -->
+          <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 540">
+            <!-- Active bbox on current frame -->
+            <rect x="380" y="240" width="95" height="65" fill="none" stroke="#60a5fa" stroke-width="2.5" rx="2"/>
+            <!-- Trajectory trail -->
+            <polyline
+              points="200,120 250,160 310,200 380,240 420,275"
+              fill="none"
+              stroke="#60a5fa"
+              stroke-width="1.5"
+              stroke-dasharray="4,3"
+              opacity="0.6"
+            />
+            <!-- Entry point -->
+            <circle cx="200" cy="120" r="4" fill="#4ade80" opacity="0.8"/>
+            <text x="210" y="118" fill="#4ade80" font-size="10" opacity="0.8">N entry</text>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Replay controls -->
+      <div class="bg-surface border-t border-border px-4 py-2.5 flex items-center gap-4 shrink-0">
+        <button class="text-text-secondary hover:text-text-primary transition-colors">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <!-- Progress bar -->
+        <div class="flex-1 h-1 bg-background rounded-full overflow-hidden">
+          <div class="h-full bg-transit-blue rounded-full" style="width: 45%"></div>
+        </div>
+        <span class="text-xs text-text-secondary">1.5s / 3.4s</span>
+        <button class="text-xs text-text-secondary hover:text-text-primary transition-colors">Loop</button>
+      </div>
+    </div>
+
+    <!-- Right Panel — Alert Feed + Detail -->
+    <div class="w-[360px] bg-surface border-l border-border flex flex-col shrink-0">
+      <!-- Filter Bar -->
+      <div class="px-4 py-3 border-b border-border flex items-center gap-2">
+        <div class="flex items-center gap-1 bg-background rounded-lg p-0.5">
+          <button class="px-2.5 py-1 text-xs font-medium rounded-md bg-text-primary/10 text-text-primary">All (50)</button>
+          <button class="px-2.5 py-1 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary">Transit</button>
+          <button class="px-2.5 py-1 text-xs font-medium rounded-md text-text-secondary hover:text-text-primary">Stagnant</button>
+        </div>
+      </div>
+
+      <!-- Alert Cards (scrollable) -->
+      <div class="flex-1 overflow-y-auto">
+
+        <!-- Selected transit alert -->
+        <div class="px-3 py-2.5 border-b border-border/50 bg-transit-blue/5 border-l-2 border-l-transit-blue cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-12 h-12 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-gray-600 to-gray-700 flex items-center justify-center">
+                <span class="text-[8px] text-text-secondary">car</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">N → S</span>
+                <span class="text-[10px] text-text-secondary ml-auto">12:34:56</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-text-secondary">
+                <span>car #142</span>
+                <span>·</span>
+                <span>3.4s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Unselected transit -->
+        <div class="px-3 py-2.5 border-b border-border/50 hover:bg-background/50 transition-colors cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-12 h-12 rounded-lg bg-background flex-shrink-0">
+              <div class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
+                <span class="text-[8px] text-text-secondary">truck</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">S → N</span>
+                <span class="text-[10px] text-text-secondary ml-auto">12:34:40</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-text-secondary">
+                <span>truck #138</span>
+                <span>·</span>
+                <span>5.1s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stagnant alert -->
+        <div class="px-3 py-2.5 border-b border-border/50 hover:bg-background/50 transition-colors cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-12 h-12 rounded-lg bg-background flex-shrink-0">
+              <div class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
+                <span class="text-[8px] text-text-secondary">car</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-stagnant-amber"></span>
+                <span class="text-xs font-medium text-stagnant-amber">Stagnant</span>
+                <span class="text-[10px] text-text-secondary ml-auto">12:33:15</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-text-secondary">
+                <span>car #115</span>
+                <span>·</span>
+                <span>2m 30s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- More cards... -->
+        <div class="px-3 py-2.5 border-b border-border/50 hover:bg-background/50 transition-colors cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-12 h-12 rounded-lg bg-background flex-shrink-0">
+              <div class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
+                <span class="text-[8px] text-text-secondary">car</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">N → S</span>
+                <span class="text-[10px] text-text-secondary ml-auto">12:32:10</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-text-secondary">
+                <span>car #131</span>
+                <span>·</span>
+                <span>2.8s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-3 py-2.5 border-b border-border/50 hover:bg-background/50 transition-colors cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-12 h-12 rounded-lg bg-background flex-shrink-0">
+              <div class="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
+                <span class="text-[8px] text-text-secondary">bus</span>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">S → N</span>
+                <span class="text-[10px] text-text-secondary ml-auto">12:30:55</span>
+              </div>
+              <div class="flex items-center gap-2 text-xs text-text-secondary">
+                <span>bus #127</span>
+                <span>·</span>
+                <span>6.2s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Alert Detail Panel (bottom) -->
+      <div class="border-t border-border p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold">Alert Details</h3>
+          <span class="px-2 py-0.5 bg-transit-blue/10 text-transit-blue text-xs rounded-full">Transit</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs mb-3">
+          <div>
+            <span class="text-text-secondary">Track ID</span>
+            <p class="font-medium">#142</p>
+          </div>
+          <div>
+            <span class="text-text-secondary">Class</span>
+            <p class="font-medium">car</p>
+          </div>
+          <div>
+            <span class="text-text-secondary">Direction</span>
+            <p class="font-medium">North → South</p>
+          </div>
+          <div>
+            <span class="text-text-secondary">Duration</span>
+            <p class="font-medium">3.4s</p>
+          </div>
+          <div>
+            <span class="text-text-secondary">Confidence</span>
+            <p class="font-medium">0.91</p>
+          </div>
+          <div>
+            <span class="text-text-secondary">Method</span>
+            <p class="font-medium">confirmed</p>
+          </div>
+        </div>
+
+        <button class="w-full px-3 py-2 bg-background border border-border rounded-lg text-xs text-text-secondary hover:text-text-primary hover:border-text-secondary transition-colors flex items-center justify-center gap-2">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download Best Photo
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ==================== ALTERNATE STATE: Spinner (clip extracting) ==================== -->
+  <div class="border-t border-border mt-8 pt-6 px-6">
+    <p class="text-text-secondary text-xs uppercase tracking-wider mb-4">Alternate State: Clip Extracting</p>
+    <div class="bg-black rounded-xl overflow-hidden" style="height: 300px;">
+      <div class="w-full h-full flex flex-col items-center justify-center gap-3">
+        <svg class="w-8 h-8 text-transit-blue animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="text-text-secondary text-sm">Extracting replay clip...</span>
+        <span class="text-text-secondary text-xs">This may take a few seconds</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ALTERNATE STATE: Stagnant alert view ==================== -->
+  <div class="border-t border-border mt-8 pt-6 px-6 pb-8">
+    <p class="text-text-secondary text-xs uppercase tracking-wider mb-4">Alternate State: Stagnant Alert (Static Frame + BBox)</p>
+    <div class="bg-black rounded-xl overflow-hidden" style="height: 300px;">
+      <div class="w-full h-full relative flex items-center justify-center">
+        <div class="absolute inset-0 bg-gradient-to-br from-gray-900 to-gray-800"></div>
+        <svg class="absolute inset-0 w-full h-full" viewBox="0 0 960 300">
+          <!-- Stagnant vehicle bbox -->
+          <rect x="410" y="100" width="100" height="65" fill="none" stroke="#fbbf24" stroke-width="2.5" rx="2"/>
+          <text x="410" y="95" fill="#fbbf24" font-size="11" font-weight="bold">car #115 — Stagnant 2m 30s</text>
+        </svg>
+        <span class="text-text-secondary text-xs absolute bottom-3 left-3">Static frame at best-photo timestamp</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

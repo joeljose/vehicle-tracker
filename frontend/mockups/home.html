@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vehicle Tracker — Home</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#0f1117',
+            surface: '#1a1d23',
+            border: '#2a2d35',
+            'text-primary': '#e1e1e1',
+            'text-secondary': '#9ca3af',
+            'transit-blue': '#60a5fa',
+            'stagnant-amber': '#fbbf24',
+            'active-green': '#4ade80',
+            'error-red': '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .state-section { border-top: 1px solid #2a2d35; padding-top: 2rem; margin-top: 2rem; }
+  </style>
+</head>
+<body class="bg-background text-text-primary min-h-screen">
+
+  <!-- ==================== STATE: Pipeline Running, Multiple Channels ==================== -->
+  <div class="max-w-5xl mx-auto p-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold">Vehicle Tracker</h1>
+        <p class="text-text-secondary text-sm mt-1">Junction monitoring dashboard</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="flex items-center gap-2 text-sm text-active-green">
+          <span class="w-2 h-2 rounded-full bg-active-green animate-pulse"></span>
+          Pipeline Running
+        </span>
+        <button class="px-4 py-2 bg-error-red/10 text-error-red border border-error-red/20 rounded-lg text-sm font-medium hover:bg-error-red/20 transition-colors">
+          Stop Pipeline
+        </button>
+      </div>
+    </div>
+
+    <!-- Add Channel -->
+    <div class="flex gap-3 mb-6">
+      <input
+        type="text"
+        placeholder="Video source path or URL..."
+        class="flex-1 px-4 py-2.5 bg-surface border border-border rounded-lg text-text-primary placeholder-text-secondary text-sm focus:outline-none focus:border-transit-blue/50 focus:ring-1 focus:ring-transit-blue/20"
+      >
+      <button class="px-5 py-2.5 bg-transit-blue text-white rounded-lg text-sm font-medium hover:bg-transit-blue/90 transition-colors whitespace-nowrap">
+        + Add Channel
+      </button>
+    </div>
+
+    <!-- Channel Cards Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+      <!-- Channel 0 — Analytics phase, active -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-transit-blue/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 0</span>
+            <span class="px-2 py-0.5 bg-transit-blue/10 text-transit-blue text-xs rounded-full font-medium">Analytics</span>
+          </div>
+          <svg class="w-4 h-4 text-text-secondary group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </div>
+        <p class="text-text-secondary text-xs truncate mb-3">/data/lytle_south.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <div class="flex items-center gap-3">
+            <span class="text-transit-blue">47 transit</span>
+            <span class="text-stagnant-amber">3 stagnant</span>
+          </div>
+          <span class="text-text-secondary">30 fps</span>
+        </div>
+      </a>
+
+      <!-- Channel 1 — Setup phase -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-transit-blue/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 1</span>
+            <span class="px-2 py-0.5 bg-stagnant-amber/10 text-stagnant-amber text-xs rounded-full font-medium">Setup</span>
+          </div>
+          <svg class="w-4 h-4 text-text-secondary group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </div>
+        <p class="text-text-secondary text-xs truncate mb-3">/data/741_73.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <div class="flex items-center gap-3">
+            <span class="text-text-secondary">No alerts yet</span>
+          </div>
+          <span class="text-text-secondary">—</span>
+        </div>
+      </a>
+
+      <!-- Channel 2 — Review phase -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-transit-blue/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 2</span>
+            <span class="px-2 py-0.5 bg-active-green/10 text-active-green text-xs rounded-full font-medium">Review</span>
+          </div>
+          <svg class="w-4 h-4 text-text-secondary group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </div>
+        <p class="text-text-secondary text-xs truncate mb-3">/data/drugmart_73.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <div class="flex items-center gap-3">
+            <span class="text-transit-blue">128 transit</span>
+            <span class="text-stagnant-amber">12 stagnant</span>
+          </div>
+          <span class="text-text-secondary">Idle</span>
+        </div>
+      </a>
+
+    </div>
+
+    <!-- ==================== STATE: Pipeline Stopped ==================== -->
+    <div class="state-section">
+      <p class="text-text-secondary text-xs uppercase tracking-wider mb-4">State: Pipeline Stopped</p>
+
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold">Vehicle Tracker</h1>
+          <p class="text-text-secondary text-sm mt-1">Junction monitoring dashboard</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-2 text-sm text-text-secondary">
+            <span class="w-2 h-2 rounded-full bg-text-secondary"></span>
+            Pipeline Stopped
+          </span>
+          <button class="px-4 py-2 bg-active-green/10 text-active-green border border-active-green/20 rounded-lg text-sm font-medium hover:bg-active-green/20 transition-colors">
+            Start Pipeline
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div class="flex flex-col items-center justify-center py-16 text-center">
+        <div class="w-16 h-16 bg-surface rounded-2xl flex items-center justify-center mb-4">
+          <svg class="w-8 h-8 text-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        </div>
+        <h3 class="text-lg font-medium mb-1">No active channels</h3>
+        <p class="text-text-secondary text-sm max-w-md">Start the pipeline, then add a video source to begin monitoring a junction.</p>
+      </div>
+    </div>
+
+    <!-- ==================== STATE: Pipeline Starting (Loading) ==================== -->
+    <div class="state-section">
+      <p class="text-text-secondary text-xs uppercase tracking-wider mb-4">State: Pipeline Starting</p>
+
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold">Vehicle Tracker</h1>
+          <p class="text-text-secondary text-sm mt-1">Junction monitoring dashboard</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="flex items-center gap-2 text-sm text-stagnant-amber">
+            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            Starting...
+          </span>
+          <button disabled class="px-4 py-2 bg-surface border border-border rounded-lg text-sm font-medium text-text-secondary cursor-not-allowed">
+            Starting...
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== STATE: Backend Unreachable ==================== -->
+    <div class="state-section">
+      <p class="text-text-secondary text-xs uppercase tracking-wider mb-4">State: Backend Unreachable</p>
+
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold">Vehicle Tracker</h1>
+          <p class="text-text-secondary text-sm mt-1">Junction monitoring dashboard</p>
+        </div>
+      </div>
+
+      <div class="bg-error-red/5 border border-error-red/20 rounded-xl p-6 text-center">
+        <div class="w-12 h-12 bg-error-red/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+          <svg class="w-6 h-6 text-error-red" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+        </div>
+        <h3 class="text-error-red font-medium mb-1">Backend Unreachable</h3>
+        <p class="text-text-secondary text-sm">Cannot connect to the vehicle tracker backend at <code class="text-text-primary bg-surface px-1.5 py-0.5 rounded text-xs">localhost:8000</code>. Make sure the backend container is running.</p>
+        <button class="mt-4 px-4 py-2 bg-surface border border-border rounded-lg text-sm text-text-primary hover:border-text-secondary transition-colors">
+          Retry Connection
+        </button>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
