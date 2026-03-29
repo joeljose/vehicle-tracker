@@ -43,6 +43,23 @@ class TestChannelManagement:
         resp = client.post("/channel/add", json={"source": "/data/video.mp4"})
         assert resp.status_code == 409
 
+    def test_add_channel_source_not_found(self, client):
+        client.post("/pipeline/start")
+        resp = client.post(
+            "/channel/add",
+            json={"source": "/nonexistent/path/video.mp4"},
+        )
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["detail"].lower()
+
+    def test_add_channel_url_skips_validation(self, client):
+        client.post("/pipeline/start")
+        resp = client.post(
+            "/channel/add",
+            json={"source": "https://youtube.com/watch?v=abc"},
+        )
+        assert resp.status_code == 200
+
     def test_remove_channel(self, client):
         client.post("/pipeline/start")
         client.post("/channel/add", json={"source": "/data/video.mp4"})

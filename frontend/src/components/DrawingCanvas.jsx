@@ -278,9 +278,10 @@ export default function DrawingCanvas({
     [imgRef, tool]
   );
 
-  // Click handler
+  // Click handler — skip if part of a double-click
   const handleClick = useCallback(
     (e) => {
+      if (e.detail >= 2) return; // let handleDblClick handle it
       const img = imgRef.current;
       if (!img || !tool) return;
 

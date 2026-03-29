@@ -113,6 +113,15 @@ def add_channel(
 ):
     if not request.app.state.pipeline_started:
         raise HTTPException(status_code=409, detail="Pipeline not started")
+    # Validate source file exists (skip for URLs)
+    if not body.source.startswith(("http://", "https://", "rtsp://")):
+        from pathlib import Path
+        source_path = Path(body.source)
+        if source_path.is_absolute() and not source_path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source file not found: {body.source}",
+            )
     channel_id = request.app.state.next_channel_id
     request.app.state.next_channel_id += 1
     backend.add_channel(channel_id, body.source)

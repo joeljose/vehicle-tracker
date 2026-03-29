@@ -42,7 +42,6 @@ function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps })
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
 
-  // Reset state when pipeline status changes
   useEffect(() => {
     if (pipelineStarted) {
       setErrored(false);
@@ -85,7 +84,6 @@ function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps })
         onLoad={() => setLoaded(true)}
         onError={() => setErrored(true)}
       />
-      {/* Drawing canvas overlay — visible in Setup phase when stream loaded */}
       {phase === "setup" && loaded && (
         <DrawingCanvas imgRef={imgRef} {...drawingProps} />
       )}
@@ -101,9 +99,18 @@ function ChannelContent() {
   const toast = useToast();
   const wsRef = useRef(null);
   const imgRef = useRef(null);
+  const confTimerRef = useRef(null);
   const [error, setError] = useState(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [phaseLoading, setPhaseLoading] = useState(false);
+
+  // Refs to avoid stale closures in WS handlers
+  const dispatchRef = useRef(dispatch);
+  const alertDispatchRef = useRef(alertDispatch);
+  const toastRef = useRef(toast);
+  useEffect(() => { dispatchRef.current = dispatch; }, [dispatch]);
+  useEffect(() => { alertDispatchRef.current = alertDispatch; }, [alertDispatch]);
+  useEffect(() => { toastRef.current = toast; }, [toast]);
 
   // Review state
   const [selectedAlert, setSelectedAlert] = useState(null);
@@ -115,13 +122,14 @@ function ChannelContent() {
   const [pendingPoints, setPendingPoints] = useState([]);
   const [labelInput, setLabelInput] = useState(null);
 
-  // Load channel state on mount
+  // Load channel state on mount — no cancellation guards, always set loading false
   useEffect(() => {
-    let cancelled = false;
     async function load() {
       try {
-        const data = await getChannel(channelId);
-        if (cancelled) return;
+        const [data, alerts] = await Promise.all([
+          getChannel(channelId),
+          getAlerts({ channel: channelId }),
+        ]);
         dispatch({
           type: "SET_CHANNEL",
           channelId: data.channel_id,
@@ -129,23 +137,18 @@ function ChannelContent() {
           source: data.source,
         });
         dispatch({ type: "SET_PIPELINE_STARTED", started: data.pipeline_started });
-
-        // Backfill alerts
-        const alerts = await getAlerts({ channel: channelId });
-        if (cancelled) return;
         alertDispatch({ type: "SET_ALERTS", alerts });
         setError(null);
       } catch {
-        if (!cancelled) setError("load");
+        setError("load");
       } finally {
-        if (!cancelled) setPageLoading(false);
+        setPageLoading(false);
       }
     }
     load();
-    return () => { cancelled = true; };
   }, [channelId, dispatch, alertDispatch]);
 
-  // WebSocket subscription
+  // WebSocket subscription — uses refs to avoid stale closures
   useEffect(() => {
     const ws = createWs({
       channels: [channelId],
@@ -160,30 +163,30 @@ function ChannelContent() {
 
     ws.on("phase_changed", (msg) => {
       if (msg.channel === channelId) {
-        dispatch({ type: "SET_PHASE", phase: msg.phase });
+        dispatchRef.current({ type: "SET_PHASE", phase: msg.phase });
       }
     });
 
     ws.on("pipeline_event", (msg) => {
       if (msg.event === "started") {
-        dispatch({ type: "SET_PIPELINE_STARTED", started: true });
+        dispatchRef.current({ type: "SET_PIPELINE_STARTED", started: true });
       } else if (msg.event === "stopped") {
-        dispatch({ type: "SET_PIPELINE_STARTED", started: false });
-        toast("Pipeline stopped", "error");
+        dispatchRef.current({ type: "SET_PIPELINE_STARTED", started: false });
+        toastRef.current("Pipeline stopped", "error");
       }
     });
 
     ws.on("transit_alert", (msg) => {
-      alertDispatch({ type: "ADD_ALERT", alert: msg });
+      alertDispatchRef.current({ type: "ADD_ALERT", alert: msg });
     });
 
     ws.on("stagnant_alert", (msg) => {
-      alertDispatch({ type: "ADD_ALERT", alert: msg });
+      alertDispatchRef.current({ type: "ADD_ALERT", alert: msg });
     });
 
     ws.on("stats_update", (msg) => {
       if (msg.channel === channelId) {
-        dispatch({ type: "SET_STATS", stats: msg });
+        dispatchRef.current({ type: "SET_STATS", stats: msg });
       }
     });
 
@@ -191,7 +194,10 @@ function ChannelContent() {
     wsRef.current = ws;
 
     return () => ws.close();
-  }, [channelId, dispatch, alertDispatch, toast]);
+  }, [channelId]);
+
+  // Clean up debounce timer on unmount
+  useEffect(() => () => clearTimeout(confTimerRef.current), []);
 
   // Drawing tool callbacks
   const handleToolChange = useCallback((newTool) => {
@@ -263,12 +269,10 @@ function ChannelContent() {
     }
   }, [channelId, dispatch, toast]);
 
-  // Confidence threshold (debounced)
   const handleConfidenceChange = useCallback((e) => {
     const val = parseFloat(e.target.value);
-    // Debounce is handled inline
-    clearTimeout(handleConfidenceChange._timer);
-    handleConfidenceChange._timer = setTimeout(() => {
+    clearTimeout(confTimerRef.current);
+    confTimerRef.current = setTimeout(() => {
       updateConfig({ confidence_threshold: val }).catch(() => {});
     }, 300);
   }, []);

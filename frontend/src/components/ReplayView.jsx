@@ -41,22 +41,21 @@ export default function ReplayView({ alert }) {
     }
     load();
 
-    // Poll if extracting
-    let pollTimer;
-    if (replayStatus === "extracting" || replayStatus === "not_started") {
-      pollTimer = setInterval(async () => {
-        try {
-          const s = await getReplayStatus(alert.alert_id);
-          if (!cancelled) setReplayStatus(s.status);
-        } catch { /* ignore */ }
-      }, 2000);
-    }
-
-    return () => {
-      cancelled = true;
-      clearInterval(pollTimer);
-    };
+    return () => { cancelled = true; };
   }, [alert?.alert_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Separate polling effect — re-runs when replayStatus changes
+  useEffect(() => {
+    if (!alert || (replayStatus !== "extracting" && replayStatus !== "not_started")) return;
+    let cancelled = false;
+    const pollTimer = setInterval(async () => {
+      try {
+        const s = await getReplayStatus(alert.alert_id);
+        if (!cancelled) setReplayStatus(s.status);
+      } catch { /* ignore */ }
+    }, 2000);
+    return () => { cancelled = true; clearInterval(pollTimer); };
+  }, [alert?.alert_id, replayStatus]);
 
   // Canvas overlay for bbox + trajectory (transit clips)
   const drawOverlay = useCallback(() => {
@@ -90,11 +89,16 @@ export default function ReplayView({ alert }) {
     const frame = perFrame[lo];
     if (!frame) return;
 
-    // Scale factor (video natural size → canvas display size)
+    // Scale factor accounting for object-fit:contain letterboxing
     const natW = video.videoWidth || 1920;
     const natH = video.videoHeight || 1080;
-    const sx = canvas.width / natW;
-    const sy = canvas.height / natH;
+    const scaleX = canvas.width / natW;
+    const scaleY = canvas.height / natH;
+    const scale = Math.min(scaleX, scaleY);
+    const offsetX = (canvas.width - natW * scale) / 2;
+    const offsetY = (canvas.height - natH * scale) / 2;
+    const tx = (x) => x * scale + offsetX;
+    const ty = (y) => y * scale + offsetY;
 
     const color = TRANSIT_COLOR;
 
@@ -102,9 +106,9 @@ export default function ReplayView({ alert }) {
     const trajectory = fullAlert.full_trajectory || [];
     if (trajectory.length >= 2) {
       ctx.beginPath();
-      ctx.moveTo(trajectory[0][0] * sx, trajectory[0][1] * sy);
+      ctx.moveTo(tx(trajectory[0][0]), ty(trajectory[0][1]));
       for (let i = 1; i < trajectory.length; i++) {
-        ctx.lineTo(trajectory[i][0] * sx, trajectory[i][1] * sy);
+        ctx.lineTo(tx(trajectory[i][0]), ty(trajectory[i][1]));
       }
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
@@ -117,7 +121,7 @@ export default function ReplayView({ alert }) {
       // Entry point
       const entry = trajectory[0];
       ctx.beginPath();
-      ctx.arc(entry[0] * sx, entry[1] * sy, 4, 0, Math.PI * 2);
+      ctx.arc(tx(entry[0]), ty(entry[1]), 4, 0, Math.PI * 2);
       ctx.fillStyle = ENTRY_COLOR;
       ctx.globalAlpha = 0.7;
       ctx.fill();
@@ -128,7 +132,7 @@ export default function ReplayView({ alert }) {
     const [bx, by, bw, bh] = frame.bbox;
     ctx.strokeStyle = color;
     ctx.lineWidth = 2.5;
-    ctx.strokeRect(bx * sx, by * sy, bw * sx, bh * sy);
+    ctx.strokeRect(tx(bx), ty(by), bw * scale, bh * scale);
   }, [fullAlert]);
 
   // Video frame callback for sync
