@@ -82,3 +82,20 @@ class FakeBackend:
         if channel_id not in self.channel_phases:
             raise KeyError(f"Channel {channel_id} not found")
         return self.channel_phases[channel_id]
+
+    # -- Test helpers (not part of PipelineBackend Protocol) --
+
+    def emit_frame(
+        self, channel_id: int, frame_number: int = 0, jpeg: bytes = b"\xff\xd8fake"
+    ) -> None:
+        """Simulate pipeline producing a frame. Calls registered frame callback."""
+        if self._frame_callback is None:
+            return
+        result = FrameResult(
+            channel_id=channel_id,
+            frame_number=frame_number,
+            timestamp_ms=frame_number * 33,
+            detections=[],
+            annotated_jpeg=jpeg,
+        )
+        self._frame_callback(result)

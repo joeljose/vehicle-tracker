@@ -1,5 +1,7 @@
 """Integration tests for FastAPI pipeline control endpoints."""
 
+import queue
+
 
 class TestPipelineLifecycle:
     def test_start_pipeline(self, client):
@@ -166,3 +168,116 @@ class TestIntegration:
         client.post("/pipeline/start")
         r = client.post("/channel/add", json={"source": "/data/c.mp4"})
         assert r.json()["channel_id"] == 0
+
+
+class TestMjpegStream:
+    def test_stream_nonexistent_channel(self, client):
+        client.post("/pipeline/start")
+        resp = client.get("/stream/99")
+        assert resp.status_code == 404
+
+    def test_stream_pipeline_not_started(self, client):
+        resp = client.get("/stream/0")
+        assert resp.status_code == 409
+
+
+class TestMjpegBroadcaster:
+    """Unit tests for MjpegBroadcaster — tests the fan-out logic directly."""
+
+    def test_subscribe_creates_queue(self, app):
+        broadcaster = app.state.mjpeg
+        q = broadcaster.subscribe(0)
+        assert isinstance(q, queue.Queue)
+
+    def test_on_frame_delivers_to_subscriber(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q = broadcaster.subscribe(0)
+        result = FrameResult(
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=b"\xff\xd8test",
+        )
+        broadcaster.on_frame(result)
+        assert q.get_nowait() == b"\xff\xd8test"
+
+    def test_on_frame_skips_none_jpeg(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q = broadcaster.subscribe(0)
+        result = FrameResult(
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=None,
+        )
+        broadcaster.on_frame(result)
+        assert q.empty()
+
+    def test_on_frame_fan_out_to_multiple_subscribers(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q1 = broadcaster.subscribe(0)
+        q2 = broadcaster.subscribe(0)
+        result = FrameResult(
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=b"\xff\xd8multi",
+        )
+        broadcaster.on_frame(result)
+        assert q1.get_nowait() == b"\xff\xd8multi"
+        assert q2.get_nowait() == b"\xff\xd8multi"
+
+    def test_on_frame_drops_oldest_when_full(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q = broadcaster.subscribe(0)  # maxsize=2
+        for i in range(3):
+            result = FrameResult(
+                channel_id=0,
+                frame_number=i,
+                timestamp_ms=i * 33,
+                detections=[],
+                annotated_jpeg=f"frame{i}".encode(),
+            )
+            broadcaster.on_frame(result)
+        # Queue should have the 2 most recent frames
+        assert q.get_nowait() == b"frame1"
+        assert q.get_nowait() == b"frame2"
+        assert q.empty()
+
+    def test_unsubscribe_removes_queue(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q = broadcaster.subscribe(0)
+        broadcaster.unsubscribe(0, q)
+        result = FrameResult(
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=b"\xff\xd8test",
+        )
+        broadcaster.on_frame(result)
+        assert q.empty()
+
+    def test_channels_are_independent(self, app):
+        from backend.pipeline.protocol import FrameResult
+        broadcaster = app.state.mjpeg
+        q0 = broadcaster.subscribe(0)
+        q1 = broadcaster.subscribe(1)
+        result = FrameResult(
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=b"\xff\xd8ch0",
+        )
+        broadcaster.on_frame(result)
+        assert q0.get_nowait() == b"\xff\xd8ch0"
+        assert q1.empty()

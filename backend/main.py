@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from backend.api.mjpeg import MjpegBroadcaster
+from backend.api.mjpeg import router as mjpeg_router
 from backend.api.routes import router
 from backend.pipeline.alerts import AlertStore
 
@@ -39,7 +41,12 @@ def create_app(backend: str = "deepstream") -> FastAPI:
     app.state.pipeline_started = False
     app.state.next_channel_id = 0
 
+    broadcaster = MjpegBroadcaster()
+    app.state.mjpeg = broadcaster
+    pipeline_backend.register_frame_callback(broadcaster.on_frame)
+
     app.include_router(router)
+    app.include_router(mjpeg_router)
     return app
 
 
