@@ -5,11 +5,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: "#0f1117",
-        surface: "#1a1d23",
-        border: "#2a2d35",
-        "text-primary": "#e1e1e1",
-        "text-secondary": "#9ca3af",
+        background: "#09090b",
+        surface: "#18181b",
+        elevated: "#27272a",
+        border: "#27272a",
+        "border-strong": "#3f3f46",
+        "text-primary": "#fafafa",
+        "text-secondary": "#a1a1aa",
+        "text-muted": "#71717a",
+        accent: "#6366f1",
+        "accent-hover": "#818cf8",
         "transit-blue": "#60a5fa",
         "stagnant-amber": "#fbbf24",
         "active-green": "#4ade80",
@@ -24,10 +29,20 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        "toast-in": {
+          from: { transform: "translateY(16px)", opacity: "0" },
+          to: { transform: "translateY(0)", opacity: "1" },
+        },
+        "toast-out": {
+          from: { transform: "translateY(0)", opacity: "1" },
+          to: { transform: "translateY(16px)", opacity: "0" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "toast-in": "toast-in 0.2s ease-out",
+        "toast-out": "toast-out 0.15s ease-in forwards",
       },
     },
   },
