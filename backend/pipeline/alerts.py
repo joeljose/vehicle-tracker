@@ -67,6 +67,7 @@ class AlertStore:
                     "frame": f["frame"],
                     "bbox": list(f["bbox"]),
                     "centroid": list(f["centroid"]),
+                    "timestamp_ms": f.get("timestamp_ms", 0),
                 }
                 for f in per_frame_data
             ],
@@ -126,6 +127,7 @@ class AlertStore:
         self,
         limit: int = 50,
         alert_type: str | None = None,
+        channel: int | None = None,
     ) -> list[dict]:
         """Get alert summaries (newest first, paginated).
 
@@ -140,6 +142,8 @@ class AlertStore:
                 continue
             if alert_type and alert["type"] != alert_type:
                 continue
+            if channel is not None and alert["channel"] != channel:
+                continue
             result.append(self._to_summary(alert))
             if len(result) >= limit:
                 break
@@ -151,6 +155,10 @@ class AlertStore:
         if alert is None:
             return None
         return self._to_summary(alert)
+
+    def count_by_channel(self, channel: int) -> int:
+        """Count alerts for a specific channel."""
+        return sum(1 for a in self._alerts.values() if a["channel"] == channel)
 
     def clear_channel(self, channel: int) -> None:
         """Remove all alerts for a channel (Phase 4 teardown)."""

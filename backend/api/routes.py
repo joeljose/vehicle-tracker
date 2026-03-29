@@ -10,6 +10,7 @@ from backend.api.models import (
     PhaseResponse,
     RemoveChannelRequest,
     SetPhaseRequest,
+    SiteConfigRequest,
     StatusResponse,
     UpdateConfigRequest,
 )
@@ -19,6 +20,27 @@ from backend.pipeline.alerts import AlertStore
 from backend.pipeline.protocol import ChannelPhase, PipelineBackend
 
 router = APIRouter()
+
+
+@router.get("/channels")
+def list_channels(
+    request: Request,
+    backend: PipelineBackend = Depends(get_backend),
+    alert_store: AlertStore = Depends(get_alert_store),
+):
+    if not request.app.state.pipeline_started:
+        return {"channels": [], "pipeline_started": False}
+    channels = []
+    for channel_id, source in backend.channels.items():
+        phase = backend.get_channel_phase(channel_id)
+        alert_count = alert_store.count_by_channel(channel_id)
+        channels.append({
+            "channel_id": channel_id,
+            "source": source,
+            "phase": phase.value,
+            "alert_count": alert_count,
+        })
+    return {"channels": channels, "pipeline_started": True}
 
 
 @router.post("/pipeline/start", response_model=StatusResponse)
@@ -92,6 +114,7 @@ def remove_channel(
 def set_channel_phase(
     channel_id: int,
     body: SetPhaseRequest,
+    request: Request,
     backend: PipelineBackend = Depends(get_backend),
 ):
     try:
@@ -102,9 +125,16 @@ def set_channel_phase(
             status_code=422, detail=f"Invalid phase. Must be one of: {valid}"
         )
     try:
+        previous = backend.get_channel_phase(channel_id)
         backend.set_channel_phase(channel_id, phase)
     except KeyError:
         raise HTTPException(status_code=404, detail="Channel not found")
+    request.app.state.ws.enqueue({
+        "type": "phase_changed",
+        "channel": channel_id,
+        "phase": phase.value,
+        "previous_phase": previous.value,
+    })
     return PhaseResponse(status="ok", phase=phase.value)
 
 
@@ -124,9 +154,10 @@ def update_config(
 def list_alerts(
     limit: int = Query(default=50, ge=1, le=200),
     type: str | None = Query(default=None),
+    channel: int | None = Query(default=None),
     alert_store: AlertStore = Depends(get_alert_store),
 ):
-    return alert_store.get_alerts(limit=limit, alert_type=type)
+    return alert_store.get_alerts(limit=limit, alert_type=type, channel=channel)
 
 
 @router.get("/alert/{alert_id}")
@@ -152,19 +183,15 @@ def get_snapshot(
 
 
 @router.post("/site/config", response_model=StatusResponse)
-def save_site(body: dict):
-    site_id = body.get("site_id")
-    if not site_id:
-        raise HTTPException(status_code=422, detail="site_id is required")
-    roi = [tuple(p) for p in body.get("roi_polygon", [])]
-    if len(roi) < 3:
-        raise HTTPException(
-            status_code=422, detail="ROI polygon must have at least 3 vertices"
-        )
+def save_site(body: SiteConfigRequest):
+    entry_exit = {
+        k: {"label": v.label, "start": list(v.start), "end": list(v.end)}
+        for k, v in body.entry_exit_lines.items()
+    }
     config = SiteConfig(
-        site_id=site_id,
-        roi_polygon=roi,
-        entry_exit_lines=body.get("entry_exit_lines", {}),
+        site_id=body.site_id,
+        roi_polygon=list(body.roi_polygon),
+        entry_exit_lines=entry_exit,
     )
     site_config_mod.save_site_config(config, site_config_mod.SITES_DIR)
     return StatusResponse(status="saved")

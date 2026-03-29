@@ -392,8 +392,8 @@ class TestWsBroadcaster:
         ws_ch0.send_text = AsyncMock()
 
         broadcaster._clients = [
-            (ws_all, None),       # no filter — receives all
-            (ws_ch0, {0}),        # only channel 0
+            (ws_all, None, None),       # no filter — receives all
+            (ws_ch0, {0}, None),        # only channel 0
         ]
 
         # Broadcast a channel 1 message
@@ -414,7 +414,7 @@ class TestWsBroadcaster:
 
         ws_ch0 = MagicMock()
         ws_ch0.send_text = AsyncMock()
-        broadcaster._clients = [(ws_ch0, {0})]
+        broadcaster._clients = [(ws_ch0, {0}, None)]
 
         msg = {"type": "pipeline_event", "event": "started", "detail": "test"}
         asyncio.run(broadcaster._broadcast(msg))
