@@ -85,6 +85,19 @@ export async function getAlert(alertId) {
   return (await request(`/alert/${alertId}`)).json();
 }
 
+// -- Replay --
+
+export function replayUrl(alertId) {
+  return `/api/alert/${alertId}/replay`;
+}
+
+export async function getReplayStatus(alertId) {
+  const resp = await fetch(`${BASE}/alert/${alertId}/replay`);
+  if (resp.status === 202) return { status: (await resp.json()).status };
+  if (resp.status === 200) return { status: "ready" };
+  throw new Error(`Replay error: ${resp.status}`);
+}
+
 // -- Snapshots --
 
 export function snapshotUrl(trackId) {
