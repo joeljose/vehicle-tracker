@@ -2,7 +2,7 @@
 ## Vehicle Tracker System — Traffic Junction Monitor
 
 **Version:** 0.3
-**Status:** Draft
+**Status:** M2 Complete
 **Last updated:** March 2026
 
 ---
@@ -497,7 +497,7 @@ duration_ms, frames_stationary
 | Milestone | Deliverable | Dependencies |
 |---|---|---|
 | M1 -- DeepStream single-channel | Single-channel file input with full DeepStream pipeline: decode, TrafficCamNet detection, NvDCF tracking, ROI polygon filtering, entry/exit line-crossing, direction state machine, stagnant detection, best-photo capture, proximity-based track stitching, idle optimization. All implemented as GStreamer pad probe functions. Structured logging. 153 tests. **COMPLETE.** | None |
-| M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. | M1 |
+| M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE.** | M1 |
 | M3 -- React UI | Control panel, video panels (MJPEG), alert feed sidebar, stats bar, phase controls, WebSocket integration, ROI polygon and entry/exit line drawing tools on canvas overlay, site config save/load. | M2 |
 | M4 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for YouTube Live. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M3 |
 | M5 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M4 |

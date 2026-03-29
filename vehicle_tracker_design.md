@@ -1757,7 +1757,7 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | Milestone | Description | Key Deliverables |
 |---|---|---|
 | **M1** | DeepStream pipeline — single-channel file input | Detection + NvDCF tracking + ROI + line-crossing + direction FSM + stagnant detection + best-photo capture + track stitching + idle optimization. 153 tests. **COMPLETE.** |
-| **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. |
+| **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE.** |
 | **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load. |
 | **M4** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for YouTube Live, per-alert replay data |
 | **M5** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |

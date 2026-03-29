@@ -12,6 +12,12 @@ A GPU-accelerated vehicle tracking system for traffic junction monitoring. Detec
 - **Browser-based UI** — React frontend with alert feed, ROI/line drawing tools, and video replay
 - **Recorded video and RTSP** — analyze pre-recorded footage or monitor live camera streams
 
+## Status
+
+- **M1 — DeepStream pipeline:** Complete (v0.1.0) — single-channel detection, tracking, direction FSM, alerts, best-photo capture. 177 tests.
+- **M2 — API layer:** Complete (v0.2.0) — FastAPI REST/WebSocket/MJPEG endpoints, AlertStore, PipelineBackend Protocol. 237 tests.
+- **M3 — React UI:** Next
+
 ## Target Hardware
 
 - NVIDIA GeForce RTX 4050 Max-Q (Mobile), 6 GB VRAM
