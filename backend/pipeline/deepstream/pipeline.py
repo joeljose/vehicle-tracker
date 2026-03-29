@@ -28,6 +28,7 @@ from backend.pipeline.direction import (
 )
 from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.snapshot import BestPhotoTracker
+from backend.pipeline.stitch import TrackStitcher
 from backend.pipeline.trajectory import TrajectoryBuffer
 
 
@@ -66,6 +67,9 @@ class TrackingReporter(BatchMetadataOperator):
         # Best-photo capture
         self.best_photo = best_photo
         self.snapshot_dir = snapshot_dir
+        # Track stitching
+        self.stitcher = TrackStitcher()
+        self.merge_count = 0
 
     def handle_metadata(self, batch_meta):
         try:
@@ -98,21 +102,43 @@ class TrackingReporter(BatchMetadataOperator):
                     )
 
                     if track_id not in self.active_tracks:
-                        traj = TrajectoryBuffer()
-                        traj.append(cx, cy, self.frame_count)
+                        # Check stitcher for a matching lost track
+                        match = self.stitcher.find_match(
+                            position=(cx, cy), frame_number=self.frame_count,
+                        )
+                        if match:
+                            # Merge: inherit trajectory, DSM from lost track
+                            traj = match["trajectory"]
+                            traj.append(cx, cy, self.frame_count)
+                            dsm = match["dsm"]
+                            lost_tid = match["lost_track_id"]
+                            self.merge_count += 1
+                            gap_sec = match["gap_frames"] / 30.0
+                            print(
+                                f"Track #{track_id} merged with lost track "
+                                f"#{lost_tid} (dist={match['distance']:.0f}px, "
+                                f"gap={gap_sec:.1f}s)",
+                                flush=True,
+                            )
+                        else:
+                            traj = TrajectoryBuffer()
+                            traj.append(cx, cy, self.frame_count)
+                            dsm = DirectionStateMachine()
+
                         self.active_tracks[track_id] = {
                             "label": label,
                             "first_frame": self.frame_count,
                             "last_frame": self.frame_count,
                             "trajectory": traj,
                             "roi_active": in_roi,
-                            "dsm": DirectionStateMachine(),
+                            "dsm": dsm,
                         }
-                        roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
-                        print(
-                            f"New track #{track_id} ({label}): {roi_tag}",
-                            flush=True,
-                        )
+                        if not match:
+                            roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
+                            print(
+                                f"New track #{track_id} ({label}): {roi_tag}",
+                                flush=True,
+                            )
                     else:
                         track_state = self.active_tracks[track_id]
                         # Get previous centroid before appending new one
@@ -160,6 +186,10 @@ class TrackingReporter(BatchMetadataOperator):
 
                 self.total_detections += frame_detections
 
+                # Expire old stitcher tracks — do deferred processing
+                for exp_tid, exp_state in self.stitcher.expire(self.frame_count):
+                    self._finalize_lost_track(exp_tid, exp_state)
+
                 # Detect lost tracks (not seen this frame)
                 lost_ids = [
                     tid for tid in list(self.active_tracks)
@@ -168,39 +198,34 @@ class TrackingReporter(BatchMetadataOperator):
                 for tid in lost_ids:
                     track = self.active_tracks.pop(tid)
                     lifetime = track["last_frame"] - track["first_frame"] + 1
-                    trajectory = track["trajectory"].get_full()
                     print(
                         f"Track #{tid} lost after {lifetime} frames",
                         flush=True,
                     )
 
-                    # Save best photo on track loss
-                    if self.best_photo:
-                        self.best_photo.save(tid, self.snapshot_dir)
-
-                    # Try to infer direction on track loss
-                    dsm = track["dsm"]
-                    if track["roi_active"] and self.lines:
-                        alert = dsm.on_track_lost(trajectory, self.lines)
-                        if alert:
-                            alert["track_id"] = tid
-                            alert["frame"] = self.frame_count
-                            self.transit_alerts.append(alert)
-                            print(
-                                f"TRANSIT: Track #{tid}: "
-                                f"{alert['entry_label']} -> {alert['exit_label']} "
-                                f"({alert['method']})",
-                                flush=True,
-                            )
-
-                    self.lost_tracks.append({
-                        "track_id": tid,
-                        "label": track["label"],
-                        "lifetime": lifetime,
-                        "trajectory": trajectory,
-                        "roi_active": track["roi_active"],
-                        "direction_state": dsm.state.value,
-                    })
+                    if track["roi_active"]:
+                        # Buffer for stitching — defer direction inference
+                        self.stitcher.on_track_lost(
+                            track_id=tid,
+                            trajectory=track["trajectory"],
+                            dsm=track["dsm"],
+                            frame_number=self.frame_count,
+                        )
+                        # Store label for finalization
+                        self.stitcher.lost_tracks[tid]["label"] = track["label"]
+                        self.stitcher.lost_tracks[tid]["lifetime"] = lifetime
+                    else:
+                        # Non-ROI track — finalize immediately
+                        if self.best_photo:
+                            self.best_photo.save(tid, self.snapshot_dir)
+                        self.lost_tracks.append({
+                            "track_id": tid,
+                            "label": track["label"],
+                            "lifetime": lifetime,
+                            "trajectory": track["trajectory"].get_full(),
+                            "roi_active": False,
+                            "direction_state": track["dsm"].state.value,
+                        })
 
                 if self.frame_count % self.report_interval == 0:
                     elapsed = time.time() - self.start_time
@@ -216,6 +241,45 @@ class TrackingReporter(BatchMetadataOperator):
                     )
         except Exception as e:
             print(f"ERROR in TrackingReporter: {e}", flush=True)
+
+    def _finalize_lost_track(self, tid: int, stitcher_state: dict) -> None:
+        """Handle a track that expired from the stitcher (no merge found).
+
+        Performs deferred direction inference, best-photo save, and
+        adds the track to the lost_tracks summary.
+        """
+        dsm = stitcher_state["dsm"]
+        trajectory = stitcher_state["trajectory"]
+        trajectory_full = trajectory.get_full()
+        label = stitcher_state.get("label", "unknown")
+        lifetime = stitcher_state.get("lifetime", 0)
+
+        # Save best photo
+        if self.best_photo:
+            self.best_photo.save(tid, self.snapshot_dir)
+
+        # Direction inference
+        if self.lines:
+            alert = dsm.on_track_lost(trajectory_full, self.lines)
+            if alert:
+                alert["track_id"] = tid
+                alert["frame"] = self.frame_count
+                self.transit_alerts.append(alert)
+                print(
+                    f"TRANSIT: Track #{tid}: "
+                    f"{alert['entry_label']} -> {alert['exit_label']} "
+                    f"({alert['method']})",
+                    flush=True,
+                )
+
+        self.lost_tracks.append({
+            "track_id": tid,
+            "label": label,
+            "lifetime": lifetime,
+            "trajectory": trajectory_full,
+            "roi_active": True,
+            "direction_state": dsm.state.value,
+        })
 
     def _check_crossings(
         self,
@@ -294,6 +358,7 @@ class TrackingReporter(BatchMetadataOperator):
             "tracks": all_tracks,
             "crossings": list(self.crossings),
             "transit_alerts": list(self.transit_alerts),
+            "merges": self.merge_count,
             "calibrations": {
                 arm_id: {
                     "label": cal.line.label,
@@ -458,6 +523,11 @@ def run_pipeline(
 
     flow()
 
+    # Finalize remaining stitcher tracks (no merge will happen)
+    for tid, state in list(reporter.stitcher.lost_tracks.items()):
+        reporter._finalize_lost_track(tid, state)
+    reporter.stitcher.lost_tracks.clear()
+
     # Save any remaining active tracks' photos
     if reporter.best_photo:
         for tid in list(reporter.active_tracks):
@@ -468,6 +538,7 @@ def run_pipeline(
         f"\nPipeline complete: {summary['frames']} frames, "
         f"{summary['total_detections']} detections, "
         f"{summary['unique_tracks']} unique tracks, "
+        f"{summary['merges']} merges, "
         f"{summary['fps']:.1f} fps",
         flush=True,
     )
