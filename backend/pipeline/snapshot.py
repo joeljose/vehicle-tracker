@@ -1,6 +1,7 @@
 """Best-photo capture — score, crop, and save the best frame per tracked vehicle."""
 
 import logging
+import math
 from pathlib import Path
 
 import cv2
@@ -15,6 +16,11 @@ class BestPhotoTracker:
     Scoring: bbox_area * confidence.  Only the best crop is kept in memory
     per track (~50 KB JPEG equivalent).  On track end, the crop is written
     to disk as a JPEG.
+
+    Crops are always square (long_side × long_side) with the vehicle
+    occupying ≥50% of the scene-expanded area.  Scene expansion adds
+    real frame content around the vehicle for context.  Black padding
+    fills any gap from frame boundaries or elongation.
 
     Usage (called from pipeline probes each frame):
         1. score()          — called per detection (metadata probe)
@@ -54,34 +60,95 @@ class BestPhotoTracker:
         frame: np.ndarray,
         bbox: tuple[float, float, float, float],
     ) -> np.ndarray | None:
-        """Crop a bounding box region from an RGB frame.
+        """Crop a square region centered on the bbox from an RGB frame.
 
-        CuPy's asnumpy() handles GPU row-stride padding transparently,
-        so the frame shape reflects actual pixel dimensions.
+        Algorithm:
+            1. long = max(w, h), short = min(w, h)
+            2. Expand shorter side until vehicle area ≥ 50% of expanded area
+            3. Cap expansion at long side
+            4. Extract from frame, clamp to bounds (black for out-of-frame)
+            5. Pad remaining gap with black to reach long × long square
 
         Args:
             frame: RGB uint8 array, shape (H, W, 3).
             bbox: (left, top, width, height).
 
         Returns:
-            Cropped RGB array or None if the crop has zero area.
+            Square RGB array (long_side × long_side × 3) or None if zero area.
         """
         left, top, w, h = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
         if w <= 0 or h <= 0:
             return None
 
         frame_h, frame_w = frame.shape[:2]
+        long = max(w, h)
+        short = min(w, h)
 
-        # Clamp to frame bounds
-        x1 = max(0, left)
-        y1 = max(0, top)
-        x2 = min(frame_w, left + w)
-        y2 = min(frame_h, top + h)
+        # Scene expansion: ensure vehicle ≥ 50% of scene area
+        scene_expand = max(0, math.ceil(w * h / long - short / 2))
+        scene_short = min(short + 2 * scene_expand, long)
+        black_pad = long - scene_short
 
-        if x2 <= x1 or y2 <= y1:
-            return None
+        # Determine expansion direction and compute crop region
+        if w >= h:
+            # Wider bbox → expand vertically
+            expand_each = (scene_short - h) / 2
+            crop_x1 = left
+            crop_x2 = left + w
+            crop_y1 = top - math.floor(expand_each)
+            crop_y2 = top + h + math.ceil(expand_each)
+        else:
+            # Taller bbox → expand horizontally
+            expand_each = (scene_short - w) / 2
+            crop_x1 = left - math.floor(expand_each)
+            crop_x2 = left + w + math.ceil(expand_each)
+            crop_y1 = top
+            crop_y2 = top + h
 
-        return frame[y1:y2, x1:x2, :].copy()
+        # Create output square (black-filled)
+        result = np.zeros((long, long, 3), dtype=np.uint8)
+
+        # Determine where scene content goes in the result
+        # (centered, with black_pad split evenly on the expansion axis)
+        pad_before = black_pad // 2
+        pad_after = black_pad - pad_before
+
+        if w >= h:
+            # Black padding is on top/bottom of the vertical axis
+            dst_y1 = pad_before
+            dst_y2 = long - pad_after
+            dst_x1 = 0
+            dst_x2 = long  # long == w for wider bbox
+        else:
+            # Black padding is on left/right of the horizontal axis
+            dst_x1 = pad_before
+            dst_x2 = long - pad_after
+            dst_y1 = 0
+            dst_y2 = long  # long == h for taller bbox
+
+        # Clamp crop region to frame bounds and adjust destination
+        src_x1 = max(0, crop_x1)
+        src_y1 = max(0, crop_y1)
+        src_x2 = min(frame_w, crop_x2)
+        src_y2 = min(frame_h, crop_y2)
+
+        # Offset into destination for frame-boundary clipping
+        clip_left = src_x1 - crop_x1
+        clip_top = src_y1 - crop_y1
+        clip_right = crop_x2 - src_x2
+        clip_bottom = crop_y2 - src_y2
+
+        # Actual destination region (after clipping adjustments)
+        fill_x1 = dst_x1 + clip_left
+        fill_y1 = dst_y1 + clip_top
+        fill_x2 = dst_x2 - clip_right
+        fill_y2 = dst_y2 - clip_bottom
+
+        # Copy frame content into result
+        if fill_x2 > fill_x1 and fill_y2 > fill_y1 and src_x2 > src_x1 and src_y2 > src_y1:
+            result[fill_y1:fill_y2, fill_x1:fill_x2, :] = frame[src_y1:src_y2, src_x1:src_x2, :]
+
+        return result
 
     def extract_crops(self, frame: np.ndarray) -> None:
         """Extract pending crops from the current frame buffer.
