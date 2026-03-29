@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vehicle Tracker — Home</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#09090b',
+            surface: '#18181b',
+            elevated: '#27272a',
+            border: '#27272a',
+            'border-strong': '#3f3f46',
+            'text-primary': '#fafafa',
+            'text-secondary': '#a1a1aa',
+            'text-muted': '#71717a',
+            accent: '#6366f1',
+            'accent-hover': '#818cf8',
+            'transit-blue': '#60a5fa',
+            'stagnant-amber': '#fbbf24',
+            'active-green': '#4ade80',
+            'error-red': '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .state-label { border-top: 1px solid #27272a; padding-top: 2rem; margin-top: 2.5rem; }
+    /* Toast animation */
+    @keyframes toast-in { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .toast { animation: toast-in 0.2s ease-out; }
+  </style>
+</head>
+<body class="bg-background text-text-primary min-h-screen">
+
+  <!-- ==================== STATE: Pipeline Running, Multiple Channels ==================== -->
+  <div class="max-w-5xl mx-auto p-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold">Vehicle Tracker</h1>
+        <p class="text-text-secondary text-sm mt-1">Junction monitoring dashboard</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="flex items-center gap-2 text-sm text-active-green">
+          <span class="w-2 h-2 rounded-full bg-active-green animate-pulse"></span>
+          Pipeline Running
+        </span>
+        <!-- Destructive action — triggers confirmation modal -->
+        <button class="px-4 py-2 bg-error-red/10 text-error-red border border-error-red/20 rounded-lg text-sm font-medium hover:bg-error-red/20 transition-colors">
+          Stop Pipeline
+        </button>
+      </div>
+    </div>
+
+    <!-- Add Channel -->
+    <div class="flex gap-3 mb-6">
+      <input
+        type="text"
+        placeholder="Video source path or URL..."
+        class="flex-1 px-4 py-2.5 bg-surface border border-border rounded-lg text-text-primary placeholder-text-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
+      >
+      <button class="px-5 py-2.5 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors whitespace-nowrap">
+        + Add Channel
+      </button>
+    </div>
+
+    <!-- Channel Cards Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+      <!-- Channel 0 — Analytics phase, active -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-accent/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 0</span>
+            <span class="px-2 py-0.5 bg-transit-blue/10 text-transit-blue text-xs rounded-full font-medium">Analytics</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="text-text-muted hover:text-error-red transition-colors opacity-0 group-hover:opacity-100" title="Remove channel">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            <svg class="w-4 h-4 text-text-muted group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          </div>
+        </div>
+        <p class="text-text-muted text-xs truncate mb-3">/data/lytle_south.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-text-secondary">50 alerts</span>
+          <span class="text-text-muted">30 fps</span>
+        </div>
+      </a>
+
+      <!-- Channel 1 — Setup phase (needs attention) -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-accent/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 1</span>
+            <span class="px-2 py-0.5 bg-stagnant-amber/10 text-stagnant-amber text-xs rounded-full font-medium flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-stagnant-amber animate-pulse"></span>
+              Setup
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="text-text-muted hover:text-error-red transition-colors opacity-0 group-hover:opacity-100" title="Remove channel">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            <svg class="w-4 h-4 text-text-muted group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          </div>
+        </div>
+        <p class="text-text-muted text-xs truncate mb-3">/data/741_73.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-text-muted">No alerts yet</span>
+          <span class="text-text-muted">—</span>
+        </div>
+      </a>
+
+      <!-- Channel 2 — Review phase -->
+      <a href="#" class="block bg-surface border border-border rounded-xl p-4 hover:border-accent/30 transition-colors group">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-sm font-semibold">Channel 2</span>
+            <span class="px-2 py-0.5 bg-active-green/10 text-active-green text-xs rounded-full font-medium">Review</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="text-text-muted hover:text-error-red transition-colors opacity-0 group-hover:opacity-100" title="Remove channel">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            <svg class="w-4 h-4 text-text-muted group-hover:text-text-primary transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          </div>
+        </div>
+        <p class="text-text-muted text-xs truncate mb-3">/data/drugmart_73.mp4</p>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-text-secondary">140 alerts</span>
+          <span class="text-text-muted">Idle</span>
+        </div>
+      </a>
+
+    </div>
+
+    <!-- Confirmation Modal (for Stop Pipeline) -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">UX-C: Confirmation Modal (Stop Pipeline)</p>
+      <div class="fixed inset-0 bg-black/60 flex items-center justify-center" style="position:relative; height:220px; border-radius:12px;">
+        <div class="bg-surface border border-border rounded-xl p-6 w-[420px] shadow-2xl">
+          <h3 class="text-base font-semibold mb-2">Stop Pipeline?</h3>
+          <p class="text-text-secondary text-sm mb-5">All in-memory alerts, snapshots, and replay data will be cleared. This cannot be undone.</p>
+          <div class="flex justify-end gap-3">
+            <button class="px-4 py-2 bg-elevated border border-border-strong rounded-lg text-sm text-text-secondary hover:text-text-primary transition-colors">Cancel</button>
+            <button class="px-4 py-2 bg-error-red text-white rounded-lg text-sm font-medium hover:bg-error-red/90 transition-colors">Stop Pipeline</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">UX-B: Toast Notification</p>
+      <div class="flex flex-col items-end gap-2">
+        <div class="toast bg-surface border border-border rounded-lg px-4 py-3 shadow-lg flex items-center gap-3 w-[320px]">
+          <span class="w-2 h-2 rounded-full bg-active-green flex-shrink-0"></span>
+          <span class="text-sm">Pipeline started</span>
+          <span class="text-text-muted text-xs ml-auto">just now</span>
+        </div>
+        <div class="toast bg-surface border border-border rounded-lg px-4 py-3 shadow-lg flex items-center gap-3 w-[320px]">
+          <span class="w-2 h-2 rounded-full bg-active-green flex-shrink-0"></span>
+          <span class="text-sm">Config saved</span>
+          <span class="text-text-muted text-xs ml-auto">just now</span>
+        </div>
+        <div class="toast bg-surface border border-border rounded-lg px-4 py-3 shadow-lg flex items-center gap-3 w-[320px]">
+          <span class="w-2 h-2 rounded-full bg-error-red flex-shrink-0"></span>
+          <span class="text-sm text-error-red">Failed to connect to backend</span>
+          <span class="text-text-muted text-xs ml-auto">just now</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== STATE: Pipeline Stopped ==================== -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">State: Pipeline Stopped</p>
+
+      <!-- Centered CTA when stopped -->
+      <div class="flex flex-col items-center justify-center py-16 text-center">
+        <div class="w-16 h-16 bg-surface rounded-2xl flex items-center justify-center mb-4">
+          <svg class="w-8 h-8 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        </div>
+        <h3 class="text-lg font-medium mb-1">No active channels</h3>
+        <p class="text-text-secondary text-sm max-w-md mb-6">Start the pipeline, then add a video source to begin monitoring a junction.</p>
+        <button class="px-6 py-3 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover transition-colors">
+          Start Pipeline
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== STATE: Backend Unreachable ==================== -->
+    <div class="state-label">
+      <p class="text-text-muted text-xs uppercase tracking-wider mb-4">State: Backend Unreachable</p>
+
+      <div class="bg-error-red/5 border border-error-red/20 rounded-xl p-6 text-center">
+        <div class="w-12 h-12 bg-error-red/10 rounded-xl flex items-center justify-center mx-auto mb-3">
+          <svg class="w-6 h-6 text-error-red" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+        </div>
+        <h3 class="text-error-red font-medium mb-1">Backend Unreachable</h3>
+        <p class="text-text-secondary text-sm">Cannot connect to <code class="text-text-primary bg-elevated px-1.5 py-0.5 rounded text-xs">localhost:8000</code></p>
+        <button class="mt-4 px-4 py-2 bg-surface border border-border rounded-lg text-sm text-text-primary hover:border-border-strong transition-colors">
+          Retry Connection
+        </button>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

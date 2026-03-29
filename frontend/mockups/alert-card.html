@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alert Card — Component Variants</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#09090b',
+            surface: '#18181b',
+            elevated: '#27272a',
+            border: '#27272a',
+            'border-strong': '#3f3f46',
+            'text-primary': '#fafafa',
+            'text-secondary': '#a1a1aa',
+            'text-muted': '#71717a',
+            accent: '#6366f1',
+            'transit-blue': '#60a5fa',
+            'stagnant-amber': '#fbbf24',
+            'active-green': '#4ade80',
+            'error-red': '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+</head>
+<body class="bg-background text-text-primary min-h-screen p-8">
+
+  <h1 class="text-xl font-bold mb-6">Alert Card — Component Variants</h1>
+
+  <div class="max-w-[300px] space-y-8">
+
+    <!-- Transit Cards -->
+    <div>
+      <h2 class="text-sm text-text-muted uppercase tracking-wider mb-3">Transit Alert (Blue) — 64x64 thumbnail</h2>
+      <div class="bg-surface rounded-xl overflow-hidden border border-border">
+
+        <!-- Default (read-only, Analytics phase) -->
+        <div class="px-3 py-2.5 border-b border-border/50 cursor-default">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">N &#x2192; S</span>
+                <span class="text-[10px] text-text-muted ml-auto">2s ago</span>
+              </div>
+              <div class="text-xs text-text-secondary">car #142 &middot; 3.4s</div>
+              <div class="text-[10px] text-text-muted mt-0.5">confirmed</div>
+            </div>
+          </div>
+          <span class="text-[10px] text-text-muted mt-1 block">&#x2191; Read-only (Analytics phase)</span>
+        </div>
+
+        <!-- Hover (Review phase) -->
+        <div class="px-3 py-2.5 border-b border-border/50 bg-background/50 cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">S &#x2192; N</span>
+                <span class="text-[10px] text-text-muted ml-auto">12:34:40</span>
+              </div>
+              <div class="text-xs text-text-secondary">truck #138 &middot; 5.1s</div>
+              <div class="text-[10px] text-text-muted mt-0.5">confirmed</div>
+            </div>
+          </div>
+          <span class="text-[10px] text-text-muted mt-1 block">&#x2191; Hover (Review phase)</span>
+        </div>
+
+        <!-- Selected + Expanded (accordion) -->
+        <div class="border-b border-border/50 bg-transit-blue/5 border-l-2 border-l-transit-blue">
+          <div class="px-3 py-2.5 cursor-pointer">
+            <div class="flex gap-3">
+              <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+                <div class="w-full h-full bg-gradient-to-br from-zinc-500 to-zinc-600 flex items-center justify-center">
+                  <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+                  </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                  <span class="text-xs font-medium text-transit-blue">N &#x2192; S</span>
+                  <span class="text-[10px] text-text-muted ml-auto">12:34:56</span>
+                </div>
+                <div class="text-xs text-text-secondary">car #131 &middot; 2.8s</div>
+                <div class="text-[10px] text-text-muted mt-0.5">confirmed</div>
+              </div>
+            </div>
+          </div>
+          <!-- Accordion content -->
+          <div class="px-3 pb-3 space-y-2">
+            <div class="w-full aspect-square rounded-lg bg-background flex items-center justify-center">
+              <span class="text-text-muted text-xs">Best Photo</span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+              <div><span class="text-text-muted">Direction</span><p>North &#x2192; South</p></div>
+              <div><span class="text-text-muted">Duration</span><p>2.8s</p></div>
+              <div><span class="text-text-muted">Confidence</span><p>0.89</p></div>
+              <div><span class="text-text-muted">Frames</span><p>84</p></div>
+            </div>
+            <div class="flex gap-2">
+              <button class="flex-1 px-2 py-1.5 bg-background border border-border rounded text-[10px] text-text-secondary">Download</button>
+              <button class="flex-1 px-2 py-1.5 bg-transit-blue/10 border border-transit-blue/20 rounded text-[10px] text-transit-blue">Replay</button>
+            </div>
+          </div>
+          <span class="text-[10px] text-text-muted px-3 pb-2 block">&#x2191; Selected + Expanded (Review phase)</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Stagnant Cards -->
+    <div>
+      <h2 class="text-sm text-text-muted uppercase tracking-wider mb-3">Stagnant Alert (Amber)</h2>
+      <div class="bg-surface rounded-xl overflow-hidden border border-border">
+
+        <!-- Default -->
+        <div class="px-3 py-2.5 border-b border-border/50 cursor-default">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-stagnant-amber"></span>
+                <span class="text-xs font-medium text-stagnant-amber">Stagnant</span>
+                <span class="text-[10px] text-text-muted ml-auto">1m ago</span>
+              </div>
+              <div class="text-xs text-text-secondary">car #115 &middot; 2m 30s</div>
+            </div>
+          </div>
+          <span class="text-[10px] text-text-muted mt-1 block">&#x2191; Read-only</span>
+        </div>
+
+        <!-- Selected + Expanded -->
+        <div class="bg-stagnant-amber/5 border-l-2 border-l-stagnant-amber">
+          <div class="px-3 py-2.5 cursor-pointer">
+            <div class="flex gap-3">
+              <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+                <div class="w-full h-full bg-gradient-to-br from-zinc-500 to-zinc-600 flex items-center justify-center">
+                  <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+                </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-0.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-stagnant-amber"></span>
+                  <span class="text-xs font-medium text-stagnant-amber">Stagnant</span>
+                  <span class="text-[10px] text-text-muted ml-auto">12:33:15</span>
+                </div>
+                <div class="text-xs text-text-secondary">truck #98 &middot; 4m 12s</div>
+              </div>
+            </div>
+          </div>
+          <div class="px-3 pb-3 space-y-2">
+            <div class="w-full aspect-square rounded-lg bg-background flex items-center justify-center">
+              <span class="text-text-muted text-xs">Best Photo</span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+              <div><span class="text-text-muted">Position</span><p>(450, 320)</p></div>
+              <div><span class="text-text-muted">Duration</span><p>4m 12s</p></div>
+              <div><span class="text-text-muted">Class</span><p>truck</p></div>
+              <div><span class="text-text-muted">Track ID</span><p>#98</p></div>
+            </div>
+            <button class="w-full px-2 py-1.5 bg-background border border-border rounded text-[10px] text-text-secondary">Download Photo</button>
+          </div>
+          <span class="text-[10px] text-text-muted px-3 pb-2 block">&#x2191; Selected + Expanded (Review phase)</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Data variety -->
+    <div>
+      <h2 class="text-sm text-text-muted uppercase tracking-wider mb-3">Various Data</h2>
+      <div class="bg-surface rounded-xl overflow-hidden border border-border">
+        <div class="px-3 py-2.5 border-b border-border/50 cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">E &#x2192; W</span>
+                <span class="text-[10px] text-text-muted ml-auto">just now</span>
+              </div>
+              <div class="text-xs text-text-secondary">motorcycle #201 &middot; 1.2s</div>
+              <div class="text-[10px] text-text-muted mt-0.5">inferred</div>
+            </div>
+          </div>
+        </div>
+        <div class="px-3 py-2.5 border-b border-border/50 cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-stagnant-amber"></span>
+                <span class="text-xs font-medium text-stagnant-amber">Stagnant</span>
+                <span class="text-[10px] text-text-muted ml-auto">12m ago</span>
+              </div>
+              <div class="text-xs text-text-secondary">truck #45 &middot; 15m 30s</div>
+            </div>
+          </div>
+        </div>
+        <div class="px-3 py-2.5 cursor-pointer">
+          <div class="flex gap-3">
+            <div class="w-16 h-16 rounded-lg bg-background flex-shrink-0 overflow-hidden">
+              <div class="w-full h-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center">
+                <svg class="w-6 h-6 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg>
+              </div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-transit-blue"></span>
+                <span class="text-xs font-medium text-transit-blue">W &#x2192; E</span>
+                <span class="text-[10px] text-text-muted ml-auto">1h ago</span>
+              </div>
+              <div class="text-xs text-text-secondary">car #1847 &middot; 4.7s</div>
+              <div class="text-[10px] text-text-muted mt-0.5">confirmed</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
