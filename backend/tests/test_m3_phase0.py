@@ -99,6 +99,34 @@ class TestGetChannels:
         assert ch1["alert_count"] == 0
 
 
+# -- GET /channel/{id} --
+
+class TestGetChannel:
+    def test_returns_channel_state(self, started_client):
+        resp = started_client.get("/channel/0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["channel_id"] == 0
+        assert data["source"] == "/data/video.mp4"
+        assert data["phase"] == "setup"
+        assert data["alert_count"] == 0
+        assert data["pipeline_started"] is True
+
+    def test_not_found(self, started_client):
+        resp = started_client.get("/channel/99")
+        assert resp.status_code == 404
+
+    def test_includes_alert_count(self, started_client, app):
+        app.state.alert_store.add_transit_alert(TRANSIT_ALERT, channel=0)
+        resp = started_client.get("/channel/0")
+        assert resp.json()["alert_count"] == 1
+
+    def test_reflects_phase_change(self, started_client):
+        started_client.post("/channel/0/phase", json={"phase": "analytics"})
+        resp = started_client.get("/channel/0")
+        assert resp.json()["phase"] == "analytics"
+
+
 # -- Channel filter on GET /alerts --
 
 class TestAlertChannelFilter:

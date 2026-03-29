@@ -28,6 +28,10 @@ export async function getChannels() {
   return (await request("/channels")).json();
 }
 
+export async function getChannel(channelId) {
+  return (await request(`/channel/${channelId}`)).json();
+}
+
 export async function addChannel(source) {
   return (
     await request("/channel/add", {

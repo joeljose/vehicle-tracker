@@ -82,6 +82,26 @@ def stop_pipeline(
     return StatusResponse(status="stopped")
 
 
+@router.get("/channel/{channel_id}")
+def get_channel(
+    channel_id: int,
+    request: Request,
+    backend: PipelineBackend = Depends(get_backend),
+    alert_store: AlertStore = Depends(get_alert_store),
+):
+    if channel_id not in backend.channels:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    phase = backend.get_channel_phase(channel_id)
+    alert_count = alert_store.count_by_channel(channel_id)
+    return {
+        "channel_id": channel_id,
+        "source": backend.channels[channel_id],
+        "phase": phase.value,
+        "alert_count": alert_count,
+        "pipeline_started": request.app.state.pipeline_started,
+    }
+
+
 @router.post("/channel/add", response_model=ChannelAddedResponse)
 def add_channel(
     body: AddChannelRequest,
