@@ -127,6 +127,21 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-07 | Each channel progresses through phases independently -- one channel in Setup while another is in Analytics | Must |
 | F-08 | All inference is normalized to 30 fps regardless of source frame rate; 60 fps sources skip every other frame for inference while decoding at native fps for smooth display | Must |
 
+### 8.1a Shared Pipeline (M5)
+
+| ID | Requirement | Priority |
+|---|---|---|
+| F-08a | One persistent GStreamer pipeline serves all active channels. Created on first `add_channel`, destroyed when last channel is removed or pipeline is stopped | Must |
+| F-08b | `add_channel` dynamically adds an `nvurisrcbin` source to the shared `nvstreammux` and creates a per-channel output branch (OSD → MJPEG + snapshot) after `nvstreamdemux` | Must |
+| F-08c | `remove_channel` dynamically removes the source from the mux and tears down the per-channel demux branch. Other channels are unaffected | Must |
+| F-08d | Setup→Analytics phase transition swaps the source: remove looping `nvurisrcbin` from mux, add same URI with `file-loop=False`, reinitialize `TrackingReporter` with ROI/lines/callbacks | Must |
+| F-08e | Analytics EOS is detected per-source (not pipeline-level). Only the finished channel transitions to Review; other channels keep running | Must |
+| F-08f | `BatchMetadataRouter` probe on `nvtracker` iterates `batch_meta.frame_items`, reads `source_id`, and dispatches each frame's metadata to the correct channel's `TrackingReporter` | Must |
+| F-08g | Per-channel `MjpegExtractor` and `FrameExtractor` operate on demuxed (batch_size=1) streams after `nvstreamdemux` — reusing M4 probe code unchanged | Must |
+| F-08h | NvDCF tracker assigns track IDs independently per `source_id` (zero overlap between channels, experimentally validated). Per-channel sequential ID mapping (`_seq_id`) continues to work unchanged | Must |
+| F-08i | Idle optimization applies only when ALL channels in the pipeline have zero active tracks. If any channel has active tracks, inference runs at full interval | Should |
+| F-08j | Validated for 2 concurrent channels on RTX 4050 (6 GB). N-channel support is architectural (no hard limit) but untested beyond 2 | Must |
+
 ### 8.2 Detection
 
 | ID | Requirement | Priority |
@@ -320,7 +335,10 @@ Each channel independently progresses through four phases. Multiple channels can
 | NF-06 | Per-alert replay data approximately 12 KB (40 bytes/frame x 300 frames); total approximately 85 MB for a 45-minute session |
 | NF-07 | Best-photo snapshots approximately 50 KB each, kept in memory until stream removed (Phase 4) |
 | NF-08 | Single-process architecture: FastAPI server and pipeline run in the same Python process on localhost |
-| NF-09 | Multi-channel uses single `nvstreammux` (DeepStream) or single batch loop (custom) sharing one inference engine -- saves approximately 630 MB VRAM vs separate processes |
+| NF-09 | Multi-channel uses single `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` pipeline. Shared inference saves ~280 MB VRAM vs separate pipelines (validated: +459 MB for 2 channels shared vs +738 MB for 2 separate) |
+| NF-09a | `BufferOperator` (pyservicemaker C++ pybind11) cannot handle batch_size > 1. Per-channel frame extraction MUST happen after `nvstreamdemux` where batch_size = 1 per branch |
+| NF-09b | `nvstreammux` supports per-source EOS — when one source ends, remaining sources continue. Pipeline-level EOS only fires when the last source finishes |
+| NF-09c | `nvurisrcbin` `file-loop` property is per-source. Mixed loop settings (preview loops, analytics plays once) work in the same pipeline |
 | NF-10 | Double buffering per channel prevents GPU stalls between frame transfers |
 | NF-11 | Pinned (page-locked) host memory used for all CPU-GPU transfers |
 | NF-12 | WebSocket `frame_data` messages delivered within one frame period (~33 ms) of inference completion |
@@ -341,7 +359,19 @@ Detection and tracking run continuously on all active channels regardless of pha
 
 ### Single process, multi-channel
 
-All channels share a single inference engine. DeepStream uses `nvstreammux` to batch frames from multiple sources for shared inference. The custom pipeline batches frames from multiple decoders into a single TensorRT call. This saves approximately 630 MB VRAM compared to running separate processes per channel.
+All channels share a single inference engine via one persistent GStreamer pipeline. `nvstreammux` batches frames from all active sources for shared inference through one `nvinfer` and one `nvtracker`. After the tracker, `nvstreamdemux` splits the batched stream back to per-channel branches for OSD rendering and MJPEG extraction (required because `BufferOperator` cannot handle batch_size > 1). This saves approximately 280 MB VRAM compared to separate pipelines (experimentally validated: +459 MB for 2 sources shared vs +369 MB × 2 for separate).
+
+```
+src_0 (loop/once) ──┐                                                     ┌→ [ch0] OSD → MJPEG + snapshot
+                    ├→ nvstreammux → nvinfer → nvtracker → nvstreamdemux ──┤
+src_1 (loop/once) ──┘    (shared inference + tracking)     │               └→ [ch1] OSD → MJPEG + snapshot
+                                                           │
+                                              [BatchMetadataRouter probe]
+                                              routes frame_meta.source_id
+                                              to per-channel TrackingReporter
+```
+
+Sources are added/removed dynamically from the mux via `nvurisrcbin`. Each source's `file-loop` property is set independently: `True` for Setup (preview loops), `False` for Analytics (plays once). Phase transitions swap the source: remove looping `nvurisrcbin`, add same URI with `file-loop=False`. Per-source EOS is handled by `nvstreammux` — when one source ends, other sources keep running.
 
 ### API boundary and pipeline interface
 
@@ -361,16 +391,20 @@ Browser (React, localhost)
                    |
                    v
             Pipeline core (DeepStream OR Custom -- never both)
-            |-- Source manager    (YouTube Live / file, multi-channel mux)
-            |-- Decoder           (NVDEC / DeepStream internal)
-            |-- Inference engine  (TensorRT, shared across channels)
-            |-- Tracker           (NvDCF or ByteTrack, one instance per channel)
-            |-- Phase router      (probe function or if/elif)
+            |-- nvstreammux       (batches all active sources, dynamic add/remove)
+            |-- Decoder           (NVDEC via nvurisrcbin, per-source file-loop)
+            |-- Inference engine  (TensorRT, shared across all channels)
+            |-- Tracker           (NvDCF, shared instance, tracks per source_id)
+            |-- BatchMetadataRouter (probe: routes frame_meta by source_id)
+            |-- nvstreamdemux     (splits batch to per-channel streams)
+            |-- Per-channel:
+            |   |-- OSD + MJPEG encoder (annotated frames at ~15fps)
+            |   |-- Snapshot extractor  (best-photo crops)
+            |   |-- TrackingReporter    (ROI, direction, alerts, per_frame_data)
+            |   +-- BestPhotoTracker    (score + crop + save)
             |-- Direction engine  (line crossing + state machine, Phase 2 only)
-            |-- Best-photo engine (score + crop, Phase 2 only)
             |-- Alert engine      (transit + stagnant, Phase 2 only)
-            |-- Idle optimizer    (skip inference when scene empty)
-            +-- Annotator + MJPEG encoder
+            +-- Idle optimizer    (skip inference when scene empty)
 ```
 
 ### Lifecycle
@@ -518,7 +552,7 @@ duration_ms, frames_stationary
 | M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE (v0.2.0).** | M1 |
 | M3 -- React UI | React frontend with 4-phase workflow (Setup/Analytics/Review/Teardown), MJPEG video panel, ROI polygon and entry/exit line drawing tools on canvas overlay, alert feed sidebar with filter tabs, stats bar (FPS/tracks/inference), site config save/load, WebSocket integration, phase controls. 286 tests. **COMPLETE (v0.3.0).** | M2 |
 | M4 -- DeepStream-FastAPI integration | DeepStreamPipeline adapter class implementing PipelineBackend Protocol. Per-channel pipeline lifecycle (preview -> analytics -> review). MjpegExtractor BufferOperator for GPU->JPEG at ~15fps. Real-time alert delivery via callbacks. Clip extraction with ffmpeg for replay. EOS auto-transition with phase callback. 312 tests. **COMPLETE (v0.4.0).** | M3 |
-| M5 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M4 |
+| M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. | M4 |
 | M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M5 |
 | M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
 | M8 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M6 |

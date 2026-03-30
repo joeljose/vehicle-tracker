@@ -29,7 +29,7 @@ The system provides two independent pipeline implementations (DeepStream and cus
 
 Two pipeline implementations exist — DeepStream (primary) and custom (secondary). They are built separately, never mixed at runtime. Both expose the identical FastAPI API boundary so the frontend and all downstream consumers are pipeline-agnostic.
 
-**Architecture principle:** Single process, multi-channel. DeepStream's `nvstreammux` batches all sources for shared inference, saving ~630 MB VRAM compared to separate processes. The custom pipeline similarly batches frames from all channels into a single TensorRT call.
+**Architecture principle:** Single process, multi-channel. One persistent GStreamer pipeline batches all active sources through shared `nvinfer` → `nvtracker`, then `nvstreamdemux` splits back to per-channel branches for OSD/MJPEG extraction. Experimentally validated savings: ~280 MB VRAM for 2 channels (+459 MB shared vs +738 MB separate).
 
 ```
                        +-----------------------+
@@ -52,24 +52,55 @@ Two pipeline implementations exist — DeepStream (primary) and custom (secondar
           +---------------------+     +---------------------+
 ```
 
-### 3.1 DeepStream Pipeline
+### 3.1 DeepStream Pipeline (M5 Shared Architecture)
 
 ```
-Sources ---> nvstreammux ---> nvinfer ---> nvtracker(NvDCF) ---> [PROBE] ---> nvvideoconvert ---> capsfilter(RGB) ---> [BUFFER PROBE] ---> sinks
-                                                                    |                                                    |
-                                                        Phase routing:                                         Best-photo extraction:
-                                                                          source_id -> channel_state dict
-                                                                          Phase 1: render boxes only
-                                                                          Phase 2: alerts, photos, direction
-                                                                          Phase 3: source removed
+src_0 (nvurisrcbin, file-loop=varies) ──┐
+                                        ├→ nvstreammux → nvinfer → nvtracker ──→ nvstreamdemux
+src_1 (nvurisrcbin, file-loop=varies) ──┘   (shared)     (shared)    (shared)         │
+                                                            │                         │
+                                               [BatchMetadataRouter probe]            │
+                                               routes frame_meta.source_id            │
+                                               to per-channel TrackingReporter        │
+                                                                                      │
+                                        ┌─────────────────────────────────────────────┘
+                                        │
+                              ┌─────────┴─────────┐
+                              ▼                   ▼
+                      [ch0 branch]          [ch1 branch]
+                      queue → nvdsosd       queue → nvdsosd
+                      → nvvideoconvert      → nvvideoconvert
+                      → capsfilter(RGB)     → capsfilter(RGB)
+                      → fakesink            → fakesink
+                      [MjpegExtractor]      [MjpegExtractor]
+                      [FrameExtractor]      [FrameExtractor]
 ```
 
-- `nvstreammux` batches frames from all active channels into a single batch tensor.
-- `nvinfer` runs TrafficCamNet (or YOLOv8s) on the batch — one inference call serves all channels.
-- `nvtracker` runs NvDCF with ReID features for robust tracking.
-- The **pad probe** function after `nvtracker` is the phase routing point. It inspects `frame_meta.source_id`, looks up the channel's current phase, and runs post-processing: direction detection (cross-product line-crossing), alert generation, best-photo scoring, track stitching, and idle optimization. Line-crossing uses custom Python (direction.py), not `nvdsanalytics`.
-- `nvdsosd` draws bounding boxes, IDs, and trajectory overlays onto the frame.
-- Sinks encode to MJPEG for HTTP streaming.
+**Shared part (one instance for all channels):**
+
+- `nvstreammux` batches frames from all active `nvurisrcbin` sources. Sources are added/removed dynamically — `add_channel` links a new source to the mux, `remove_channel` unlinks it.
+- `nvinfer` runs TrafficCamNet on the batch — one inference call serves all channels.
+- `nvtracker` runs NvDCF, tracking independently per `source_id` (zero track ID overlap between channels, experimentally validated).
+- **`BatchMetadataRouter`** probe after tracker iterates `batch_meta.frame_items`, reads `source_id`, dispatches each frame's metadata to the correct channel's `TrackingReporter` for per-channel post-processing (ROI, direction, alerts, best-photo, idle optimization).
+
+**Per-channel part (after `nvstreamdemux`):**
+
+- `nvstreamdemux` splits the batched stream back to per-channel outputs (batch_size=1 each). This is required because pyservicemaker's `BufferOperator` (C++ pybind11) cannot handle batch_size > 1.
+- Each channel branch has its own `nvdsosd` → `nvvideoconvert` → `capsfilter(RGB)` → `fakesink` chain.
+- `MjpegExtractor` (BufferOperator probe) produces annotated JPEG frames at ~15fps per channel.
+- `FrameExtractor` (BufferOperator probe) extracts clean RGB frames for best-photo snapshots.
+- These are the exact same probe classes from M4, reused unchanged.
+
+**Source lifecycle:**
+
+| Event | Action |
+|-------|--------|
+| `add_channel(id, uri)` | Create `nvurisrcbin(file-loop=True)`, link to mux. Create demux output branch. Phase = Setup. |
+| Setup → Analytics | Remove looping source from mux. Add same URI with `file-loop=False`. Reinitialize Reporter with ROI/lines/callbacks. |
+| Analytics EOS | Per-source EOS detected (mux handles this). Remove source from mux. Finalize tracks. Phase = Review. |
+| `remove_channel(id)` | Remove source from mux. Tear down demux branch. Clean up state. |
+
+**Experimental validation (exp07-08):** 466 batches/10s, ~10fps MJPEG per channel, both channels flowing continuously. VRAM: +459 MB for 2 channels shared.
 
 ### 3.2 Custom Pipeline
 
