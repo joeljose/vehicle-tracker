@@ -1,6 +1,8 @@
 services:
   backend:
-    image: nvcr.io/nvidia/deepstream:8.0-gc-triton-devel
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     runtime: nvidia
     user: "${DS_UID}:${DS_GID}"
     volumes:
@@ -14,10 +16,9 @@ services:
     ports:
       - "8000:8000"
     working_dir: /app
-    entrypoint: ["bash", "-c"]
-    command: ["pip3 install --quiet --break-system-packages --user -r backend/requirements.txt && echo 'Dev environment ready.' && tail -f /dev/null"]
+    command: ["tail", "-f", "/dev/null"]
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - HOME=/home/ds
       - PATH=/home/ds/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -38,4 +39,3 @@ services:
       - HOME=/home/node
       - npm_config_cache=/home/node/.npm
     command: ["sh", "-c", "npm install && npm run dev -- --host"]
-
