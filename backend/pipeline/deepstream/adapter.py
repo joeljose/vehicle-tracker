@@ -131,6 +131,7 @@ class DeepStreamPipeline:
         self._frame_callback: Callable[[FrameResult], None] | None = None
         self._alert_callback: Callable[[dict], None] | None = None
         self._track_ended_callback: Callable[[dict], None] | None = None
+        self._phase_callback: Callable[[int, object, object], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._confidence_threshold: float = 0.5
         self._inference_interval: int = 0
@@ -237,6 +238,9 @@ class DeepStreamPipeline:
         self, callback: Callable[[dict], None]
     ) -> None:
         self._track_ended_callback = callback
+
+    def register_phase_callback(self, callback) -> None:
+        self._phase_callback = callback
 
     # -- Snapshots --
 
@@ -480,9 +484,13 @@ class DeepStreamPipeline:
             return
         state = self._states[channel_id]
         if state.phase == ChannelPhase.ANALYTICS:
+            previous = state.phase
             self._stop_channel_pipeline(channel_id)
             state.phase = ChannelPhase.REVIEW
             logger.info("Channel %d auto-transitioned to REVIEW (EOS)", channel_id)
+            self._safe_callback(
+                self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
+            )
 
     def _stop_channel_pipeline(self, channel_id: int) -> None:
         """Stop the running pipeline for a channel."""

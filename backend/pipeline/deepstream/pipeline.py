@@ -231,9 +231,10 @@ class TrackingReporter(BatchMetadataOperator):
                             dsm=track["dsm"],
                             frame_number=self.frame_count,
                         )
-                        # Store label for finalization
+                        # Store label and frame info for finalization
                         self.stitcher.lost_tracks[tid]["label"] = track["label"]
                         self.stitcher.lost_tracks[tid]["lifetime"] = lifetime
+                        self.stitcher.lost_tracks[tid]["first_frame"] = track["first_frame"]
                     else:
                         # Non-ROI track — finalize immediately
                         if self.best_photo:
@@ -297,6 +298,9 @@ class TrackingReporter(BatchMetadataOperator):
                 alert["frame"] = self.frame_count
                 alert["label"] = label
                 alert["channel"] = self.channel_id
+                alert["first_seen_frame"] = stitcher_state.get("first_frame", 0)
+                alert["last_seen_frame"] = self.frame_count
+                alert["trajectory"] = trajectory_full
                 self.transit_alerts.append(alert)
                 logger.info(
                     "TRANSIT: Track #%d: %s -> %s (%s)",
@@ -362,6 +366,9 @@ class TrackingReporter(BatchMetadataOperator):
                     alert["frame"] = self.frame_count
                     alert["label"] = track_state["label"]
                     alert["channel"] = self.channel_id
+                    alert["first_seen_frame"] = track_state["first_frame"]
+                    alert["last_seen_frame"] = track_state["last_frame"]
+                    alert["trajectory"] = track_state["trajectory"].get_full()
                     self.transit_alerts.append(alert)
                     logger.info(
                         "TRANSIT: Track #%d: %s -> %s (%s)",

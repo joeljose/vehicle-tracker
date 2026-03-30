@@ -121,6 +121,16 @@ class PipelineBackend(Protocol):
         """
         ...
 
+    def register_phase_callback(
+        self, callback: Callable[[int, ChannelPhase, ChannelPhase], None]
+    ) -> None:
+        """Register callback invoked when a channel auto-transitions phase.
+
+        Called with (channel_id, new_phase, previous_phase). Used by the API
+        layer to push WS notifications and trigger clip extraction on EOS.
+        """
+        ...
+
     def get_snapshot(self, track_id: int) -> bytes | None:
         """Return the best-photo JPEG crop for a given track, or None."""
         ...

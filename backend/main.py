@@ -13,7 +13,7 @@ from backend.api.websocket import WsBroadcaster
 from backend.api.websocket import router as ws_router
 from backend.pipeline.alerts import AlertStore
 from backend.pipeline.clip_extractor import ClipExtractor
-from backend.pipeline.protocol import FrameResult
+from backend.pipeline.protocol import ChannelPhase, FrameResult
 
 
 @asynccontextmanager
@@ -65,6 +65,7 @@ def create_app(backend: str = "deepstream") -> FastAPI:
     app.state.ws = ws
 
     alert_store = app.state.alert_store
+    clip_extractor = app.state.clip_extractor
 
     # Fan-out frame callback to both MJPEG and WS broadcasters
     def on_frame(result: FrameResult) -> None:
@@ -82,9 +83,25 @@ def create_app(backend: str = "deepstream") -> FastAPI:
         if summary:
             ws.on_alert(summary)
 
+    def on_phase_change(
+        channel_id: int, new_phase: ChannelPhase, previous: ChannelPhase
+    ) -> None:
+        # Trigger clip extraction on analytics → review (EOS auto-transition)
+        if previous == ChannelPhase.ANALYTICS and new_phase == ChannelPhase.REVIEW:
+            source = pipeline_backend.channels.get(channel_id, "")
+            alerts = alert_store.get_channel_alerts(channel_id)
+            clip_extractor.extract_clips(channel_id, source, alerts)
+        ws.enqueue({
+            "type": "phase_changed",
+            "channel": channel_id,
+            "phase": new_phase.value,
+            "previous_phase": previous.value,
+        })
+
     pipeline_backend.register_frame_callback(on_frame)
     pipeline_backend.register_alert_callback(on_alert)
     pipeline_backend.register_track_ended_callback(ws.on_track_ended)
+    pipeline_backend.register_phase_callback(on_phase_change)
 
     app.include_router(router)
     app.include_router(mjpeg_router)

@@ -21,6 +21,7 @@ class FakeBackend:
         self._frame_callback: Callable[[FrameResult], None] | None = None
         self._alert_callback: Callable[[dict], None] | None = None
         self._track_ended_callback: Callable[[dict], None] | None = None
+        self._phase_callback = None
         self._snapshots: dict[int, bytes] = {}  # track_id -> jpeg bytes
 
     def start(self) -> None:
@@ -88,6 +89,9 @@ class FakeBackend:
         self, callback: Callable[[dict], None]
     ) -> None:
         self._track_ended_callback = callback
+
+    def register_phase_callback(self, callback) -> None:
+        self._phase_callback = callback
 
     def get_snapshot(self, track_id: int) -> bytes | None:
         return self._snapshots.get(track_id)
