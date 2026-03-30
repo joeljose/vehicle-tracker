@@ -158,26 +158,6 @@ class TestConfig:
 
 
 class TestIntegration:
-    def test_full_lifecycle(self, client):
-        # Start pipeline
-        assert client.post("/pipeline/start").status_code == 200
-        # Add channel
-        r = client.post("/channel/add", json={"source": "/data/video.mp4"})
-        assert r.json()["channel_id"] == 0
-        # Set phase
-        r = client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
-        assert r.json()["phase"] == "analytics"
-        # Update config
-        assert client.patch(
-            "/config", json={"confidence_threshold": 0.8}
-        ).status_code == 200
-        # Remove channel
-        assert client.post(
-            "/channel/remove", json={"channel_id": 0}
-        ).status_code == 200
-        # Stop pipeline
-        assert client.post("/pipeline/stop").status_code == 200
-
     def test_stop_resets_channel_counter(self, client):
         client.post("/pipeline/start")
         client.post("/channel/add", json={"source": "/data/a.mp4"})

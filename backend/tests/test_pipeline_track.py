@@ -90,7 +90,7 @@ def test_tracker_annotated_output(cleanup_output):
 
 
 def test_shadow_tracking_age():
-    """Tracker config has maxShadowTrackingAge=75 (acceptance criteria)."""
+    """Tracker config has maxShadowTrackingAge=150 (5s at 30fps)."""
     import yaml
 
     config_path = "/app/config/deepstream/tracker_config.yml"

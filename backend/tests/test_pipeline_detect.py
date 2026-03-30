@@ -64,10 +64,13 @@ def test_pipeline_annotated_output(cleanup_output):
 
 
 def test_pipeline_interval_1():
-    """60fps source with interval=1 reduces per-frame detections."""
+    """interval=1 infers every 2nd frame, producing fewer total detections."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
-    # 741 & 73 is 60fps — interval=1 means infer every 2nd frame
-    summary = run_pipeline(str(CLIP_741_73), interval=1)
+    baseline = run_pipeline(str(CLIP_741_73), interval=0)
+    skipped = run_pipeline(str(CLIP_741_73), interval=1)
 
-    assert summary["frames"] > 0
+    assert skipped["frames"] > 0
+    # interval=1 skips every other frame for inference, so total detections
+    # should be noticeably lower than interval=0 (every frame).
+    assert skipped["total_detections"] < baseline["total_detections"]
