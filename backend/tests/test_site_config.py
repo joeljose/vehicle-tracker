@@ -1,8 +1,6 @@
 """Unit tests for site config load/save (pure Python, no GPU needed)."""
 
 import json
-import tempfile
-from pathlib import Path
 
 from backend.config.site_config import SiteConfig, load_site_config, save_site_config
 

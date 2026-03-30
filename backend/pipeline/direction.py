@@ -1,7 +1,7 @@
 """Line-crossing detection, auto-calibration, and direction state machine."""
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
