@@ -33,7 +33,8 @@ def mock_psm(monkeypatch):
          patch("backend.pipeline.deepstream.adapter.MjpegExtractor"), \
          patch("backend.pipeline.deepstream.adapter.TrackingReporter") as mock_reporter_cls, \
          patch("backend.pipeline.deepstream.adapter.load_labels", return_value={0: "car"}), \
-         patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"):
+         patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"), \
+         patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter") as mock_router_cls:
 
         # Configure mock reporter
         mock_reporter = MagicMock()
@@ -50,6 +51,49 @@ def mock_psm(monkeypatch):
 def adapter(mock_psm):
     """Create a DeepStreamPipeline instance with mocked dependencies."""
     return mock_psm()
+
+
+class TestSharedPipeline:
+    def test_two_channels_share_one_pipeline(self, adapter, tmp_path):
+        """Adding two channels creates one shared pipeline, not two separate ones."""
+        adapter.start()
+        v0 = tmp_path / "a.mp4"
+        v0.write_bytes(b"fake")
+        v1 = tmp_path / "b.mp4"
+        v1.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v0))
+        adapter.add_channel(1, str(v1))
+
+        assert adapter._shared_pipeline is not None
+        # Both channels reference the same shared pipeline
+        assert adapter._states[0].pipeline is adapter._shared_pipeline
+        assert adapter._states[1].pipeline is adapter._shared_pipeline
+
+    def test_removing_last_channel_destroys_shared_pipeline(self, adapter, tmp_path):
+        """When the last channel is removed, the shared pipeline is torn down."""
+        adapter.start()
+        v0 = tmp_path / "a.mp4"
+        v0.write_bytes(b"fake")
+        adapter.add_channel(0, str(v0))
+        adapter.remove_channel(0)
+
+        assert adapter._shared_pipeline is None
+
+    def test_removing_one_channel_keeps_pipeline_for_others(self, adapter, tmp_path):
+        """Removing one channel doesn't affect the shared pipeline if others remain."""
+        adapter.start()
+        v0 = tmp_path / "a.mp4"
+        v0.write_bytes(b"fake")
+        v1 = tmp_path / "b.mp4"
+        v1.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v0))
+        adapter.add_channel(1, str(v1))
+        adapter.remove_channel(0)
+
+        assert adapter._shared_pipeline is not None
+        assert 1 in adapter.channels
 
 
 class TestLifecycle:

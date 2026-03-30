@@ -125,8 +125,8 @@ class _ChannelState:
 class DeepStreamPipeline:
     """PipelineBackend implementation wrapping DeepStream via pyservicemaker.
 
-    Manages one GStreamer pipeline per channel. Each channel transitions
-    through Setup (preview) -> Analytics (single-play with ROI) -> Review.
+    Uses a single shared GStreamer pipeline for all channels:
+    nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG.
     """
 
     def __init__(self):
@@ -141,6 +141,10 @@ class DeepStreamPipeline:
         self._inference_interval: int = 0
         self._labels: dict[int, str] | None = None
         self._started = False
+        # Shared pipeline state (M5)
+        self._shared_pipeline: Pipeline | None = None
+        self._batch_router = None
+        self._source_index: int = 0  # monotonic source counter for mux pads
 
     # -- Lifecycle --
 
@@ -158,6 +162,8 @@ class DeepStreamPipeline:
             self._stop_channel_pipeline(channel_id)
         self.channels.clear()
         self._states.clear()
+        if self._shared_pipeline is not None:
+            self._destroy_shared_pipeline()
         self._started = False
         logger.info("DeepStreamPipeline stopped")
 
@@ -169,7 +175,8 @@ class DeepStreamPipeline:
         self.channels[channel_id] = source
         state = _ChannelState(source=source)
         self._states[channel_id] = state
-        self._start_preview_pipeline(channel_id)
+        self._ensure_shared_pipeline()
+        self._add_channel_to_pipeline(channel_id)
         logger.info("Channel %d added: %s", channel_id, source)
 
     def remove_channel(self, channel_id: int) -> None:
@@ -178,6 +185,9 @@ class DeepStreamPipeline:
         self._stop_channel_pipeline(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
+        # Destroy shared pipeline if no channels remain
+        if not self._states and self._shared_pipeline is not None:
+            self._destroy_shared_pipeline()
         logger.info("Channel %d removed", channel_id)
 
     def configure_channel(
@@ -288,7 +298,130 @@ class DeepStreamPipeline:
         else:
             fn(*args)
 
-    # -- Pipeline builders --
+    # -- Shared pipeline (M5) --
+
+    def _ensure_shared_pipeline(self) -> None:
+        """Create the shared pipeline if it doesn't exist yet."""
+        if self._shared_pipeline is not None:
+            return
+
+        from backend.pipeline.deepstream.batch_router import BatchMetadataRouter
+
+        pipeline = Pipeline("shared")
+
+        # Mux — sources added dynamically per channel
+        pipeline.add("nvstreammux", "mux", {
+            "batch-size": 8,  # max channels
+            "batched-push-timeout": 33000,
+            "width": 1920,
+            "height": 1080,
+        })
+
+        # Shared inference
+        pipeline.add("nvinfer", "infer", {"config-file-path": PGIE_CONFIG})
+        pipeline.link("mux", "infer")
+
+        # Shared tracker
+        pipeline.add("nvtracker", "tracker", {
+            "tracker-width": 640,
+            "tracker-height": 384,
+            "gpu-id": 0,
+            "ll-lib-file": TRACKER_LIB,
+            "ll-config-file": TRACKER_CONFIG,
+        })
+        pipeline.link("infer", "tracker")
+
+        # Batch metadata router — dispatches per-source frames to channel reporters
+        self._batch_router = BatchMetadataRouter({})
+        pipeline.attach("tracker", Probe("batch_router", self._batch_router))
+
+        # Demux — per-channel output branches added dynamically
+        pipeline.add("nvstreamdemux", "demux", {})
+        pipeline.link("tracker", "demux")
+
+        self._shared_pipeline = pipeline
+        pipeline.start()
+        logger.info("Shared pipeline created and started")
+
+    def _add_channel_to_pipeline(self, channel_id: int) -> None:
+        """Add a source and per-channel output branch to the shared pipeline."""
+        state = self._states[channel_id]
+        source = state.source
+        file_uri = f"file://{os.path.abspath(source)}"
+        pipeline = self._shared_pipeline
+
+        # Per-channel reporter (preview mode — no ROI/lines)
+        best_photo = BestPhotoTracker()
+        state.best_photo = best_photo
+        reporter = TrackingReporter(
+            self._labels,
+            roi_polygon=None,
+            lines=None,
+            best_photo=best_photo,
+            channel_id=channel_id,
+        )
+        state.reporter = reporter
+        self._batch_router.add_reporter(channel_id, reporter)
+
+        # Frame callback bridged to asyncio
+        def on_frame(result):
+            self._safe_callback(self._frame_callback, result)
+
+        mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
+        state.mjpeg_extractor = mjpeg_extractor
+        frame_extractor = FrameExtractor(best_photo)
+
+        # Add source to mux
+        src_idx = self._source_index
+        self._source_index += 1
+        src_name = f"src_{channel_id}"
+        pipeline.add("nvurisrcbin", src_name, {
+            "uri": file_uri,
+            "file-loop": True,  # preview loops
+        })
+        pipeline.link((src_name, "mux"), ("", "sink_%u"))
+        state._src_name = src_name
+
+        # Per-channel demux output → OSD → MJPEG
+        q_name = f"q_{channel_id}"
+        osd_name = f"osd_{channel_id}"
+        conv_name = f"conv_{channel_id}"
+        caps_name = f"caps_{channel_id}"
+        sink_name = f"sink_{channel_id}"
+        pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
+        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
+        pipeline.add("nvvideoconvert", conv_name, {})
+        pipeline.add("capsfilter", caps_name, {
+            "caps": "video/x-raw(memory:NVMM),format=RGB",
+        })
+        pipeline.add("fakesink", sink_name, {"sync": True})
+        pipeline.link(("demux", q_name), ("src_%u", ""))
+        pipeline.link(q_name, osd_name, conv_name, caps_name, sink_name)
+        pipeline.attach(caps_name, Probe(f"mjpeg_{channel_id}", mjpeg_extractor))
+
+        state.pipeline = pipeline
+        logger.info("Channel %d added to shared pipeline", channel_id)
+
+    def _destroy_shared_pipeline(self) -> None:
+        """Tear down the shared pipeline."""
+        if self._shared_pipeline is None:
+            return
+        import threading as _threading
+
+        pipeline = self._shared_pipeline
+        self._shared_pipeline = None
+        self._batch_router = None
+
+        def _deferred_stop():
+            try:
+                pipeline.stop()
+            except Exception:
+                pass
+
+        _threading.Thread(target=_deferred_stop, daemon=True).start()
+        logger.info("Shared pipeline destroyed")
+
+    # -- Legacy pipeline builders (kept for reference, will be removed) --
 
     def _start_preview_pipeline(self, channel_id: int) -> None:
         """Build and start a looping preview pipeline (Setup phase)."""
