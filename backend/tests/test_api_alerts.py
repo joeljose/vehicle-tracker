@@ -88,7 +88,7 @@ class TestGetAlert:
         assert resp.status_code == 200
         full = resp.json()
         assert full["type"] == "transit_alert"
-        assert full["track_id"] == 10
+        assert full["track_id"] == "10"
         assert full["entry_direction"] == "north"
         assert full["exit_direction"] == "south"
         assert "per_frame_data" in full
@@ -102,7 +102,7 @@ class TestGetAlert:
         assert resp.status_code == 200
         full = resp.json()
         assert full["type"] == "stagnant_alert"
-        assert full["track_id"] == 20
+        assert full["track_id"] == "20"
 
     def test_get_unknown_alert(self, client):
         resp = client.get("/alert/nonexistent")

@@ -550,41 +550,33 @@ def check_line_crossing(line: LineSeg, prev_centroid: Point, curr_centroid: Poin
 
 ### 6.4 Direction Inference
 
-When a track ends without crossing both lines (common for vehicles that appear after the entry line or disappear before the exit line), direction is inferred from trajectory heading.
+When a track ends without crossing both lines (common for vehicles that appear after the entry line or disappear before the exit line), direction is inferred by **proximity** — which line segment is closest to the trajectory's start (entry) or end (exit).
+
+This approach is more robust than heading-based inference because vehicles often cross lines at oblique angles rather than perpendicular, especially at angled junctions.
 
 ```python
-def nearest_arm(trajectory: list[Point], arms: dict[str, LineSeg], use_start: bool) -> str:
+def nearest_arm(trajectory, arms, use_start, roi_centroid=None):
     """
-    Average the first or last 5-10 centroids for a stable direction vector.
-    Compute dot product of trajectory heading vs each arm's direction vector.
-    Return the arm with the highest alignment (largest dot product).
+    Average the first or last 5 centroids to reduce noise.
+    Compute point-to-line-segment distance for each arm.
+    Return the arm whose line is closest to the averaged point.
     """
-    n = min(10, len(trajectory) // 2)
-    if use_start:
-        segment = trajectory[:n]    # first N centroids -> infer entry
-    else:
-        segment = trajectory[-n:]   # last N centroids -> infer exit
+    n = min(5, len(trajectory) // 2)
+    segment = trajectory[:n] if use_start else trajectory[-n:]
+    avg_x = sum(p[0] for p in segment) / len(segment)
+    avg_y = sum(p[1] for p in segment) / len(segment)
 
-    # Direction vector from segment
-    heading = (segment[-1][0] - segment[0][0], segment[-1][1] - segment[0][1])
-    heading_mag = math.sqrt(heading[0]**2 + heading[1]**2)
-    if heading_mag < 1e-6:
-        return "unknown"
-    heading_norm = (heading[0] / heading_mag, heading[1] / heading_mag)
-
-    best_arm = None
-    best_dot = -float('inf')
-    for arm_name, line in arms.items():
-        arm_dir = (line.end[0] - line.start[0], line.end[1] - line.start[1])
-        arm_mag = math.sqrt(arm_dir[0]**2 + arm_dir[1]**2)
-        arm_norm = (arm_dir[0] / arm_mag, arm_dir[1] / arm_mag)
-        dot = heading_norm[0] * arm_norm[0] + heading_norm[1] * arm_norm[1]
-        if dot > best_dot:
-            best_dot = dot
-            best_arm = arm_name
-
+    best_arm, best_dist = None, float('inf')
+    for arm_id, line in arms.items():
+        dist = point_to_segment_distance(avg_x, avg_y, line.start, line.end)
+        if dist < best_dist:
+            best_dist, best_arm = dist, arm_id
     return best_arm
 ```
+
+### 6.5 Track ID Mapping
+
+DeepStream assigns very large 64-bit track IDs (e.g., `7531586948696113201`) that exceed JavaScript's `Number.MAX_SAFE_INTEGER` (`2^53 - 1`). To avoid precision loss in JSON serialization, `TrackingReporter` maintains a mapping from DeepStream IDs to sequential integers starting from 1. All externally-visible IDs (alerts, snapshots, WebSocket messages) use the sequential ID. The mapping is stored in `_ds_to_seq` and assigned monotonically via `_seq_id()`.
 
 ---
 
@@ -817,8 +809,8 @@ def stitch_tracks(new_track: Track, lost_tracks: list[Track], max_dist: float = 
             new_track.trajectory = lost.trajectory + new_track.trajectory
             # Note: if inherited state is UNKNOWN (lost track never crossed
             # an entry line) and the stitched track later crosses an exit
-            # line, apply nearest_arm() on the combined trajectory's initial
-            # heading to infer entry direction (method="inferred").
+            # line, apply nearest_arm() on the combined trajectory's start
+            # proximity to infer entry direction (method="inferred").
             return True
     return False
 ```

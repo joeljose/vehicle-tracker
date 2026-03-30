@@ -45,7 +45,9 @@ class AlertStore:
 
     def _add_transit_alert(self, pipeline_alert: dict, channel: int) -> str:
         alert_id = self._generate_id()
-        track_id = pipeline_alert["track_id"]
+        # Store track_id as string — DeepStream IDs exceed JavaScript's
+        # Number.MAX_SAFE_INTEGER and lose precision in JSON parsing.
+        track_id = str(pipeline_alert["track_id"])
         duration_frames = pipeline_alert.get("duration_frames", 0)
         trajectory = pipeline_alert.get("trajectory", [])
         per_frame_data = pipeline_alert.get("per_frame_data", [])
@@ -108,7 +110,7 @@ class AlertStore:
 
     def _add_stagnant_alert(self, pipeline_alert: dict, channel: int) -> str:
         alert_id = self._generate_id()
-        track_id = pipeline_alert["track_id"]
+        track_id = str(pipeline_alert["track_id"])
         duration_frames = pipeline_alert.get("stationary_duration_frames", 0)
 
         full = {

@@ -81,7 +81,7 @@ def test_full_api_lifecycle(client, app):
     alerts = alert_store.get_alerts()
     assert len(alerts) == 1
     assert alerts[0]["type"] == "transit_alert"
-    assert alerts[0]["track_id"] == 42
+    assert alerts[0]["track_id"] == "42"
 
     # WS got the alert summary
     ws_alert = ws_broadcaster._queue.get_nowait()

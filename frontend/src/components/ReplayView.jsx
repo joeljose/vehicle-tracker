@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAlert, replayUrl, getReplayStatus } from "../api/rest";
+import LinesOverlay from "./LinesOverlay";
 
 const TRANSIT_COLOR = "#60a5fa";
 const STAGNANT_COLOR = "#fbbf24";
@@ -12,7 +13,7 @@ const LABEL_BG = "rgba(0,0,0,0.7)";
  * Props:
  *   alert - selected alert summary (from AlertFeed click)
  */
-export default function ReplayView({ alert }) {
+export default function ReplayView({ alert, lines }) {
   const [fullAlert, setFullAlert] = useState(null);
   const [replayStatus, setReplayStatus] = useState(null);
   const [error, setError] = useState(null);
@@ -74,16 +75,25 @@ export default function ReplayView({ alert }) {
     const perFrame = fullAlert.per_frame_data || [];
     if (perFrame.length === 0) return;
 
-    // Get current video time and find matching frame
+    // Map video playback time to original-video time.
+    // Clip starts at (first_seen_frame / fps - PADDING_S) in the source.
     const currentMs = (video.currentTime || 0) * 1000;
+    const fps = 30;
+    const paddingMs = 1000; // matches PADDING_S in clip_extractor.py
+    // Clamp to 0 — matches max(0, ...) in clip_extractor.py
+    const clipStartMs = Math.max(0, (fullAlert.first_seen_frame / fps) * 1000 - paddingMs);
+    const originalMs = currentMs + clipStartMs;
+
+    // Don't draw overlay outside the tracked time range
     const firstTs = perFrame[0].timestamp_ms;
-    const adjustedMs = currentMs + firstTs; // clip starts at first_seen - padding
+    const lastTs = perFrame[perFrame.length - 1].timestamp_ms;
+    if (originalMs < firstTs - 500 || originalMs > lastTs + 500) return;
 
     // Binary search for closest frame
     let lo = 0, hi = perFrame.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (perFrame[mid].timestamp_ms < adjustedMs) lo = mid + 1;
+      if (perFrame[mid].timestamp_ms < originalMs) lo = mid + 1;
       else hi = mid;
     }
     const frame = perFrame[lo];
@@ -236,6 +246,7 @@ export default function ReplayView({ alert }) {
         ref={canvasRef}
         className="absolute inset-0 w-full h-full pointer-events-none"
       />
+      <LinesOverlay lines={lines} targetRef={videoRef} />
     </div>
   );
 }

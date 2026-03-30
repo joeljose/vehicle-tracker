@@ -74,7 +74,7 @@ class TestGetAlert:
         assert alert["alert_id"] == alert_id
         assert alert["type"] == "transit_alert"
         assert alert["channel"] == 0
-        assert alert["track_id"] == 567
+        assert alert["track_id"] == "567"
         assert alert["class"] == "car"
         assert alert["entry_direction"] == "north"
         assert alert["entry_label"] == "741-North"
@@ -94,7 +94,7 @@ class TestGetAlert:
 
         assert alert is not None
         assert alert["type"] == "stagnant_alert"
-        assert alert["track_id"] == 571
+        assert alert["track_id"] == "571"
         assert alert["class"] == "truck"
         assert alert["best_photo_url"] == "/snapshot/571"
         assert alert["stationary_duration_ms"] > 0
@@ -127,7 +127,7 @@ class TestGetAlerts:
         store.add_transit_alert(_make_transit_alert(track_id=1), channel=0)
         store.add_transit_alert(_make_transit_alert(track_id=2), channel=0)
         alerts = store.get_alerts()
-        assert alerts[0]["track_id"] == 2  # newest first
+        assert alerts[0]["track_id"] == "2"  # newest first
 
     def test_filter_by_type_transit(self):
         store = AlertStore()
@@ -172,7 +172,7 @@ class TestWebSocketSummary:
         assert summary["type"] == "transit_alert"
         assert summary["channel"] == 0
         assert summary["alert_id"] == alert_id
-        assert summary["track_id"] == 567
+        assert summary["track_id"] == "567"
         assert summary["class"] == "car"
         assert summary["entry_direction"] == "north"
         assert summary["entry_label"] == "741-North"
@@ -193,7 +193,7 @@ class TestWebSocketSummary:
 
         assert summary["type"] == "stagnant_alert"
         assert summary["channel"] == 0
-        assert summary["track_id"] == 571
+        assert summary["track_id"] == "571"
         assert summary["class"] == "truck"
         assert summary["best_photo_url"] == "/snapshot/571"
         assert summary["stationary_duration_ms"] > 0

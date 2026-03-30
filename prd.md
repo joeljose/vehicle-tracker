@@ -162,8 +162,9 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-26a | Line polarity (which side is junction interior) is auto-calibrated by observing the first 5-10 vehicles crossing each line during Phase 1 -- operator does not need to specify drawing direction | Must |
 | F-27 | Per-track direction state machine: UNKNOWN -> ENTERED(arm) -> EXITED(arm) -> ALERT | Must |
 | F-28 | Confirmed transit: vehicle crossed both an entry line and an exit line -- entry and exit arms are known precisely | Must |
-| F-29 | Inferred transit: when a track is lost before crossing an exit line (or appears after an entry line), trajectory heading is used to infer the missing direction via dot product against arm direction vectors | Should |
-| F-30 | `nearest_arm()` calculation averages the first/last 5-10 centroids for stable direction estimation | Should |
+| F-29 | Inferred transit: when a track is lost before crossing an exit line (or appears after an entry line), proximity to entry/exit line segments is used to infer the missing direction — the closest line to the trajectory start (entry) or end (exit) is selected | Should |
+| F-30 | `nearest_arm()` averages the first/last 5 centroids for noise reduction, then computes point-to-line-segment distance for each arm | Should |
+| F-30a | DeepStream track IDs (64-bit) are mapped to sequential IDs starting from 1 per channel to avoid JavaScript `Number.MAX_SAFE_INTEGER` overflow. Alert `track_id` fields are serialized as strings in JSON | Must |
 
 ### 8.5 Vehicle States
 
@@ -270,6 +271,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-82b | Stagnant alert Review (recorded): full frame with bbox overlay as static `<img>` | Must |
 | F-83b | Stagnant alert Review (YouTube Live): bbox drawn on frozen last frame as static `<img>` | Must |
 | F-84 | Transparent `<canvas>` overlay layer on top of video panel for ROI and line drawing in Setup phase. Coordinates stored in original pixel space, converted via object-fit:contain geometry. | Must |
+| F-84a | Entry/exit lines are displayed as a read-only canvas overlay during Analytics and Review phases, giving the operator visual context for which arms vehicles are crossing. Lines are drawn using the same coordinate mapping as Setup. | Should |
 | F-85 | Stats bar below video shows fps, active track count, and inference latency (from `stats_update` WS messages, Analytics phase) | Must |
 | F-86 | Channel tab connects to backend WebSocket with `types` filter (no `frame_data`) and reconnects automatically on drop. Home page connects with `types=pipeline_event,phase_changed`. | Must |
 | F-100 | Alert feed only shows completed events (transit alerts, stagnant alerts) -- not raw detections or active tracks. Active tracking is visible in the video panel. | Must |

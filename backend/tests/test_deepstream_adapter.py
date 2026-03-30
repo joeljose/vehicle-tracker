@@ -323,7 +323,7 @@ class TestTrackingReporterCallbacks:
         })
 
         assert len(alerts) == 1
-        assert alerts[0]["track_id"] == 42
+        assert alerts[0]["track_id"] == reporter._seq_id(42)
         assert alerts[0]["channel"] == 3
         assert alerts[0]["label"] == "car"
 
@@ -353,4 +353,4 @@ class TestTrackingReporterCallbacks:
         })
 
         assert len(ended) == 1
-        assert ended[0]["track_id"] == 10
+        assert ended[0]["track_id"] == reporter._seq_id(10)

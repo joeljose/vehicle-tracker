@@ -80,9 +80,30 @@ class TrackingReporter(BatchMetadataOperator):
         # Track stitching
         self.stitcher = TrackStitcher()
         self.merge_count = 0
+        # ROI centroid for direction inference
+        if roi_polygon and len(roi_polygon) >= 3:
+            n = len(roi_polygon)
+            self.roi_centroid = (
+                sum(p[0] for p in roi_polygon) / n,
+                sum(p[1] for p in roi_polygon) / n,
+            )
+        else:
+            self.roi_centroid = None
+        # Sequential track ID mapping — DeepStream IDs are huge integers
+        # that overflow JavaScript's Number.MAX_SAFE_INTEGER.  We assign
+        # small sequential IDs for display and API use.
+        self._ds_to_seq: dict[int, int] = {}  # deepstream_id -> sequential_id
+        self._next_seq_id = 1
         # Idle optimization
         self.idle_optimizer = IdleOptimizer()
         self.infer_node = None  # set by build_pipeline after construction
+
+    def _seq_id(self, ds_id: int) -> int:
+        """Map a DeepStream track ID to a small sequential ID."""
+        if ds_id not in self._ds_to_seq:
+            self._ds_to_seq[ds_id] = self._next_seq_id
+            self._next_seq_id += 1
+        return self._ds_to_seq[ds_id]
 
     def handle_metadata(self, batch_meta):
         try:
@@ -144,7 +165,15 @@ class TrackingReporter(BatchMetadataOperator):
                             "trajectory": traj,
                             "roi_active": in_roi,
                             "dsm": dsm,
-                            "per_frame_data": [],
+                            "per_frame_data": [{
+                                "frame": self.frame_count,
+                                "bbox": [int(rect.left), int(rect.top),
+                                         int(rect.width), int(rect.height)],
+                                "centroid": [cx, cy],
+                                "confidence": round(obj_meta.confidence, 3),
+                                "timestamp_ms": int(
+                                    self.frame_count * (1000 / 30)),
+                            }],
                         }
                         if not match:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
@@ -195,7 +224,7 @@ class TrackingReporter(BatchMetadataOperator):
                                 if self.alert_callback:
                                     self.alert_callback({
                                         "type": "stagnant_alert",
-                                        "track_id": track_id,
+                                        "track_id": self._seq_id(track_id),
                                         "label": track_state["label"],
                                         "position": (cx, cy),
                                         "stationary_duration_frames": (
@@ -210,7 +239,7 @@ class TrackingReporter(BatchMetadataOperator):
                     if in_roi and self.best_photo:
                         area = rect.width * rect.height
                         self.best_photo.score(
-                            track_id=track_id,
+                            track_id=self._seq_id(track_id),
                             area=area,
                             confidence=obj_meta.confidence,
                             bbox=(rect.left, rect.top, rect.width, rect.height),
@@ -248,9 +277,9 @@ class TrackingReporter(BatchMetadataOperator):
                     else:
                         # Non-ROI track — finalize immediately
                         if self.best_photo:
-                            self.best_photo.save(tid, self.snapshot_dir)
+                            self.best_photo.save(self._seq_id(tid), self.snapshot_dir)
                         lost_track = {
-                            "track_id": tid,
+                            "track_id": self._seq_id(tid),
                             "label": track["label"],
                             "lifetime": lifetime,
                             "trajectory": track["trajectory"].get_full(),
@@ -297,14 +326,16 @@ class TrackingReporter(BatchMetadataOperator):
         lifetime = stitcher_state.get("lifetime", 0)
 
         # Save best photo
+        seq_tid = self._seq_id(tid)
         if self.best_photo:
-            self.best_photo.save(tid, self.snapshot_dir)
+            self.best_photo.save(seq_tid, self.snapshot_dir)
 
         # Direction inference
         if self.lines:
-            alert = dsm.on_track_lost(trajectory_full, self.lines)
+            alert = dsm.on_track_lost(trajectory_full, self.lines,
+                                      roi_centroid=self.roi_centroid)
             if alert:
-                alert["track_id"] = tid
+                alert["track_id"] = seq_tid
                 alert["frame"] = self.frame_count
                 alert["label"] = label
                 alert["channel"] = self.channel_id
@@ -315,14 +346,14 @@ class TrackingReporter(BatchMetadataOperator):
                 self.transit_alerts.append(alert)
                 logger.info(
                     "TRANSIT: Track #%d: %s -> %s (%s)",
-                    tid, alert["entry_label"], alert["exit_label"],
+                    seq_tid, alert["entry_label"], alert["exit_label"],
                     alert["method"],
                 )
                 if self.alert_callback:
                     self.alert_callback(alert)
 
         lost_track = {
-            "track_id": tid,
+            "track_id": seq_tid,
             "label": label,
             "lifetime": lifetime,
             "trajectory": trajectory_full,
@@ -356,7 +387,7 @@ class TrackingReporter(BatchMetadataOperator):
                 track_id, cal.line.label, crossing_type,
             )
             self.crossings.append({
-                "track_id": track_id,
+                "track_id": self._seq_id(track_id),
                 "arm": arm_id,
                 "label": cal.line.label,
                 "type": crossing_type,
@@ -371,9 +402,10 @@ class TrackingReporter(BatchMetadataOperator):
                     arm_id, cal.line.label, crossing_type,
                     trajectory=track_state["trajectory"].get_full(),
                     arms=self.lines,
+                    roi_centroid=self.roi_centroid,
                 )
                 if alert:
-                    alert["track_id"] = track_id
+                    alert["track_id"] = self._seq_id(track_id)
                     alert["frame"] = self.frame_count
                     alert["label"] = track_state["label"]
                     alert["channel"] = self.channel_id
@@ -397,7 +429,7 @@ class TrackingReporter(BatchMetadataOperator):
         all_tracks = list(self.lost_tracks)
         for tid, track in self.active_tracks.items():
             all_tracks.append({
-                "track_id": tid,
+                "track_id": self._seq_id(tid),
                 "label": track["label"],
                 "lifetime": track["last_frame"] - track["first_frame"] + 1,
                 "trajectory": track["trajectory"].get_full(),

@@ -65,7 +65,15 @@ function AlertCard({ alert, isReview, isSelected, onSelect }) {
               src={snapshotUrl(alert.track_id)}
               alt={`Track ${trackId}`}
               className="w-full h-full object-cover"
-              onError={(e) => { e.target.style.display = "none"; }}
+              onError={(e) => {
+                const img = e.target;
+                if (!img.dataset.retried) {
+                  img.dataset.retried = "1";
+                  setTimeout(() => { img.src = img.src; }, 1000);
+                } else {
+                  img.style.display = "none";
+                }
+              }}
             />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-zinc-700 to-zinc-800" />
@@ -106,7 +114,15 @@ function AlertDetail({ alert }) {
             src={snapshotUrl(alert.track_id)}
             alt="Best photo"
             className="w-full h-full object-cover"
-            onError={(e) => { e.target.style.display = "none"; }}
+            onError={(e) => {
+                const img = e.target;
+                if (!img.dataset.retried) {
+                  img.dataset.retried = "1";
+                  setTimeout(() => { img.src = img.src; }, 1000);
+                } else {
+                  img.style.display = "none";
+                }
+              }}
           />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">

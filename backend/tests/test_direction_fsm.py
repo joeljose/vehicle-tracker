@@ -10,60 +10,61 @@ from backend.pipeline.direction import (
 
 # --- nearest_arm tests ---
 
-# Simple arms: lines pointing in cardinal directions from origin
+# Junction border lines — drawn along each edge of a rectangular ROI.
+# Proximity-based inference: the closest line to the trajectory start/end
+# determines the entry/exit arm.
+ROI_CENTROID = (500, 200)
 ARMS = {
-    "north": LineSeg(label="North", start=(500, 200), end=(500, 100)),  # points up (y decreasing)
-    "south": LineSeg(label="South", start=(500, 200), end=(500, 300)),  # points down
-    "east": LineSeg(label="East", start=(500, 200), end=(600, 200)),    # points right
-    "west": LineSeg(label="West", start=(500, 200), end=(400, 200)),    # points left
+    "north": LineSeg(label="North", start=(400, 100), end=(600, 100)),  # top edge, y=100
+    "south": LineSeg(label="South", start=(400, 300), end=(600, 300)),  # bottom edge, y=300
+    "east": LineSeg(label="East", start=(600, 100), end=(600, 300)),    # right edge, x=600
+    "west": LineSeg(label="West", start=(400, 100), end=(400, 300)),    # left edge, x=400
 }
 
 
-def test_nearest_arm_heading_east():
-    """Trajectory moving right should match east arm."""
-    # Moving from left to right
-    traj = [(100 + i * 10, 200, i) for i in range(20)]
-    result = nearest_arm(traj, ARMS, use_start=False)
-    assert result == "east"
+def test_nearest_arm_exit_south():
+    """Trajectory ending near south edge → exit = south."""
+    # Starts near north (y=110), ends near south (y=290)
+    traj = [(500, 110 + i * 10, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=False) == "south"
 
 
-def test_nearest_arm_heading_west():
-    traj = [(500 - i * 10, 200, i) for i in range(20)]
-    result = nearest_arm(traj, ARMS, use_start=False)
-    assert result == "west"
+def test_nearest_arm_exit_north():
+    """Trajectory ending near north edge → exit = north."""
+    traj = [(500, 290 - i * 10, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=False) == "north"
 
 
-def test_nearest_arm_heading_north():
-    # Moving upward (y decreasing)
-    traj = [(500, 300 - i * 10, i) for i in range(20)]
-    result = nearest_arm(traj, ARMS, use_start=False)
-    assert result == "north"
+def test_nearest_arm_exit_east():
+    """Trajectory ending near east edge → exit = east."""
+    traj = [(410 + i * 10, 200, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=False) == "east"
 
 
-def test_nearest_arm_heading_south():
-    traj = [(500, 100 + i * 10, i) for i in range(20)]
-    result = nearest_arm(traj, ARMS, use_start=False)
-    assert result == "south"
+def test_nearest_arm_exit_west():
+    """Trajectory ending near west edge → exit = west."""
+    traj = [(590 - i * 10, 200, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=False) == "west"
 
 
-def test_nearest_arm_use_start():
-    """use_start=True uses the first centroids for direction."""
-    # First 10 points go east, last 10 go south
-    traj = [(100 + i * 10, 200, i) for i in range(10)]
-    traj += [(200, 200 + i * 10, 10 + i) for i in range(10)]
-    assert nearest_arm(traj, ARMS, use_start=True) == "east"
+def test_nearest_arm_entry_and_exit():
+    """use_start=True → entry (closest to start), use_start=False → exit (closest to end)."""
+    # Starts near west edge (x=410), ends near south edge (y=290)
+    traj = [(410 + i * 5, 200 + i * 5, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=True) == "west"
     assert nearest_arm(traj, ARMS, use_start=False) == "south"
 
 
 def test_nearest_arm_too_short():
-    traj = [(100, 200, 0), (110, 200, 1)]
+    traj = [(500, 110, 0), (500, 120, 1)]
     assert nearest_arm(traj, ARMS, use_start=True) is None
 
 
-def test_nearest_arm_stationary():
-    """Stationary trajectory returns None."""
-    traj = [(500, 200, i) for i in range(20)]
-    assert nearest_arm(traj, ARMS, use_start=True) is None
+def test_nearest_arm_oblique_entry():
+    """Vehicle enters from north but heads diagonally — proximity still picks north."""
+    # Starts near north edge at (450, 105), moves diagonally
+    traj = [(450 + i * 8, 105 + i * 10, i) for i in range(20)]
+    assert nearest_arm(traj, ARMS, use_start=True) == "north"
 
 
 # --- DirectionStateMachine tests ---
@@ -92,9 +93,9 @@ def test_dsm_inferred_exit_on_loss():
     dsm = DirectionStateMachine()
     dsm.on_crossing("north", "North", "entry")
 
-    # Trajectory heading south (y increasing)
-    traj = [(500, 100 + i * 10, i) for i in range(20)]
-    result = dsm.on_track_lost(traj, ARMS)
+    # Starts near north (y=110), ends near south (y=290) → exit = south
+    traj = [(500, 110 + i * 10, i) for i in range(20)]
+    result = dsm.on_track_lost(traj, ARMS, roi_centroid=ROI_CENTROID)
     assert result is not None
     assert result["entry_arm"] == "north"
     assert result["exit_arm"] == "south"
@@ -105,25 +106,25 @@ def test_dsm_inferred_both_on_loss():
     """No crossings, track lost -> infer both entry and exit."""
     dsm = DirectionStateMachine()
 
-    # Trajectory: enters from north (heading south initially), exits east (heading east at end)
-    # First 10 points go south, last 10 points go east
-    traj = [(500, 100 + i * 10, i) for i in range(10)]
-    traj += [(500 + i * 10, 200, 10 + i) for i in range(10)]
-    result = dsm.on_track_lost(traj, ARMS)
+    # Starts near north (y=110), ends near east (x=590)
+    traj = [(450, 110 + i * 5, i) for i in range(10)]
+    traj += [(450 + i * 15, 160, 10 + i) for i in range(10)]
+    result = dsm.on_track_lost(traj, ARMS, roi_centroid=ROI_CENTROID)
     assert result is not None
     assert result["method"] == "inferred"
-    assert result["entry_arm"] == "south"  # heading south at start
-    assert result["exit_arm"] == "east"    # heading east at end
+    assert result["entry_arm"] == "north"  # starts near north edge
+    assert result["exit_arm"] == "east"    # ends near east edge
 
 
 def test_dsm_no_inference_same_arm():
-    """If inferred entry == exit, no alert (wouldn't make sense)."""
+    """Trajectory starts and ends near the same arm -> no alert."""
     dsm = DirectionStateMachine()
 
-    # Trajectory barely moves east
-    traj = [(500 + i, 200, i) for i in range(20)]
-    result = dsm.on_track_lost(traj, ARMS)
-    # Both start and end point east -> entry==exit -> no alert
+    # Starts near north edge, loops back to north edge
+    traj = [(500, 110 + i * 10, i) for i in range(10)]         # moves south
+    traj += [(500, 210 - i * 10, 10 + i) for i in range(10)]   # back toward north
+    result = dsm.on_track_lost(traj, ARMS, roi_centroid=ROI_CENTROID)
+    # entry = north, exit = north -> same arm -> None
     assert result is None
 
 
@@ -216,30 +217,32 @@ def test_dsm_stagnant_in_unknown_state():
     assert dsm.state == TrackState.STAGNANT
 
 
-def test_dsm_exit_without_entry_same_heading():
-    """Exit in UNKNOWN where heading matches exit arm -> no alert (can't distinguish)."""
+def test_dsm_exit_without_entry_too_short():
+    """Exit in UNKNOWN with trajectory too short to infer entry -> no alert."""
     dsm = DirectionStateMachine()
 
-    # Heading south, exits south -> inferred entry = south = exit -> None
-    traj = [(500, 100 + i * 10, i) for i in range(20)]
+    # Only 3 points — nearest_arm needs ≥4 to infer
+    traj = [(500, 280, 0), (500, 290, 1), (500, 300, 2)]
     result = dsm.on_crossing(
         "south", "South", "exit", trajectory=traj, arms=ARMS,
+        roi_centroid=ROI_CENTROID,
     )
     assert result is None
 
 
-def test_dsm_exit_without_entry_curved_trajectory():
-    """Exit in UNKNOWN with curved trajectory can infer different entry."""
+def test_dsm_exit_without_entry_inferred():
+    """Exit in UNKNOWN — infer entry from trajectory start proximity."""
     dsm = DirectionStateMachine()
 
-    # Start heading east, exit south
-    traj = [(100 + i * 10, 200, i) for i in range(10)]
+    # Starts near north edge (y=110), exits south
+    traj = [(500, 110 + i * 10, i) for i in range(10)]
     result = dsm.on_crossing(
         "south", "South", "exit", trajectory=traj, arms=ARMS,
+        roi_centroid=ROI_CENTROID,
     )
     assert result is not None
     assert result["exit_arm"] == "south"
-    assert result["entry_arm"] == "east"  # heading east at start
+    assert result["entry_arm"] == "north"  # starts near north edge
     assert result["method"] == "inferred"
 
 

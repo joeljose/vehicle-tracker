@@ -7,6 +7,7 @@ import AlertFeed from "../components/AlertFeed";
 import DrawingCanvas from "../components/DrawingCanvas";
 import DrawingTools from "../components/DrawingTools";
 import ReplayView from "../components/ReplayView";
+import LinesOverlay from "../components/LinesOverlay";
 import StatsBar from "../components/StatsBar";
 import { getChannel, getAlerts, setChannelPhase, updateConfig } from "../api/rest";
 import { createWs } from "../api/ws";
@@ -38,7 +39,7 @@ function PhaseIndicator({ current }) {
   );
 }
 
-function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps }) {
+function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps, lines }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
 
@@ -86,6 +87,9 @@ function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps })
       />
       {phase === "setup" && loaded && (
         <DrawingCanvas imgRef={imgRef} {...drawingProps} />
+      )}
+      {phase === "analytics" && loaded && (
+        <LinesOverlay lines={lines} targetRef={imgRef} />
       )}
     </div>
   );
@@ -138,6 +142,15 @@ function ChannelContent() {
         });
         dispatch({ type: "SET_PIPELINE_STARTED", started: data.pipeline_started });
         alertDispatch({ type: "SET_ALERTS", alerts });
+        // Restore entry/exit lines from backend config (survives page reload)
+        if (data.entry_exit_lines && Object.keys(data.entry_exit_lines).length > 0) {
+          const restored = Object.values(data.entry_exit_lines).map((l) => ({
+            label: l.label,
+            start: { x: l.start[0], y: l.start[1] },
+            end: { x: l.end[0], y: l.end[1] },
+          }));
+          setLines(restored);
+        }
         setError(null);
       } catch {
         setError("load");
@@ -372,7 +385,7 @@ function ChannelContent() {
         {/* Video / Replay Panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {phase === "review" ? (
-            <ReplayView alert={selectedAlert} />
+            <ReplayView alert={selectedAlert} lines={lines} />
           ) : (
             <VideoPanel
               channelId={channelId}
@@ -380,6 +393,7 @@ function ChannelContent() {
               phase={phase}
               imgRef={imgRef}
               drawingProps={drawingProps}
+              lines={lines}
             />
           )}
           <StatsBar />

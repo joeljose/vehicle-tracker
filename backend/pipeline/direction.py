@@ -126,17 +126,39 @@ class TrackState(Enum):
     STAGNANT = "stagnant"
 
 
+def _point_to_segment_distance(
+    px: float, py: float,
+    ax: float, ay: float,
+    bx: float, by: float,
+) -> float:
+    """Minimum distance from point (px, py) to line segment (ax,ay)-(bx,by)."""
+    dx, dy = bx - ax, by - ay
+    len_sq = dx * dx + dy * dy
+    if len_sq < 1e-12:
+        return math.sqrt((px - ax) ** 2 + (py - ay) ** 2)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+
+
 def nearest_arm(
     trajectory: list[tuple[int, int, int]],
     arms: dict[str, LineSeg],
     use_start: bool,
+    roi_centroid: tuple[float, float] | None = None,
 ) -> str | None:
-    """Infer direction from trajectory heading via dot product against arm vectors.
+    """Infer entry/exit arm by proximity — which line is closest to the
+    trajectory start (entry) or end (exit).
+
+    This is more robust than heading-based inference because vehicles
+    often cross lines at oblique angles rather than perpendicular.
 
     Args:
         trajectory: List of (x, y, frame) entries.
         arms: Arm ID -> LineSeg mapping.
         use_start: True = use first centroids (infer entry), False = use last (infer exit).
+        roi_centroid: Unused (kept for API compatibility).
 
     Returns:
         Best-matching arm ID, or None if trajectory is too short.
@@ -144,29 +166,25 @@ def nearest_arm(
     if len(trajectory) < 4:
         return None
 
-    n = min(10, len(trajectory) // 2)
-    if n < 2:
+    # Average the first/last few centroids to reduce noise
+    n = min(5, len(trajectory) // 2)
+    if n < 1:
         return None
 
     segment = trajectory[:n] if use_start else trajectory[-n:]
-
-    heading = (segment[-1][0] - segment[0][0], segment[-1][1] - segment[0][1])
-    heading_mag = math.sqrt(heading[0] ** 2 + heading[1] ** 2)
-    if heading_mag < 1e-6:
-        return None
-    hx, hy = heading[0] / heading_mag, heading[1] / heading_mag
+    avg_x = sum(p[0] for p in segment) / len(segment)
+    avg_y = sum(p[1] for p in segment) / len(segment)
 
     best_arm = None
-    best_dot = -float("inf")
+    best_dist = float("inf")
     for arm_id, line in arms.items():
-        dx = line.end[0] - line.start[0]
-        dy = line.end[1] - line.start[1]
-        mag = math.sqrt(dx ** 2 + dy ** 2)
-        if mag < 1e-6:
-            continue
-        dot = hx * (dx / mag) + hy * (dy / mag)
-        if dot > best_dot:
-            best_dot = dot
+        dist = _point_to_segment_distance(
+            avg_x, avg_y,
+            line.start[0], line.start[1],
+            line.end[0], line.end[1],
+        )
+        if dist < best_dist:
+            best_dist = dist
             best_arm = arm_id
 
     return best_arm
@@ -208,6 +226,7 @@ class DirectionStateMachine:
         crossing_type: str,
         trajectory: list[tuple[int, int, int]] | None = None,
         arms: dict[str, LineSeg] | None = None,
+        roi_centroid: tuple[float, float] | None = None,
     ) -> dict | None:
         """Handle a line crossing event.
 
@@ -250,7 +269,10 @@ class DirectionStateMachine:
             self.exit_arm = arm_id
             self.exit_label = label
             if trajectory and arms:
-                inferred_entry = nearest_arm(trajectory, arms, use_start=True)
+                inferred_entry = nearest_arm(
+                    trajectory, arms, use_start=True,
+                    roi_centroid=roi_centroid,
+                )
                 if inferred_entry and inferred_entry != arm_id:
                     self.entry_arm = inferred_entry
                     self.entry_label = arms[inferred_entry].label
@@ -269,6 +291,7 @@ class DirectionStateMachine:
         self,
         trajectory: list[tuple[int, int, int]],
         arms: dict[str, LineSeg],
+        roi_centroid: tuple[float, float] | None = None,
     ) -> dict | None:
         """Handle track loss — infer missing direction if possible.
 
@@ -277,8 +300,10 @@ class DirectionStateMachine:
         """
         if self.state == TrackState.UNKNOWN:
             # Never crossed any line — try to infer both entry and exit
-            entry = nearest_arm(trajectory, arms, use_start=True)
-            exit_ = nearest_arm(trajectory, arms, use_start=False)
+            entry = nearest_arm(trajectory, arms, use_start=True,
+                                roi_centroid=roi_centroid)
+            exit_ = nearest_arm(trajectory, arms, use_start=False,
+                                roi_centroid=roi_centroid)
             if entry and exit_ and entry != exit_:
                 return {
                     "entry_arm": entry,
@@ -291,7 +316,8 @@ class DirectionStateMachine:
 
         elif self.state in (TrackState.IN_TRANSIT, TrackState.WAITING, TrackState.STAGNANT):
             # Had entry but no exit — infer exit
-            exit_ = nearest_arm(trajectory, arms, use_start=False)
+            exit_ = nearest_arm(trajectory, arms, use_start=False,
+                                roi_centroid=roi_centroid)
             if exit_ and exit_ != self.entry_arm:
                 return {
                     "entry_arm": self.entry_arm,

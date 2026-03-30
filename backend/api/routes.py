@@ -96,12 +96,19 @@ def get_channel(
         raise HTTPException(status_code=404, detail="Channel not found")
     phase = backend.get_channel_phase(channel_id)
     alert_count = alert_store.count_by_channel(channel_id)
+    config = {}
+    if hasattr(backend, "get_channel_config"):
+        try:
+            config = backend.get_channel_config(channel_id)
+        except Exception:
+            pass
     return {
         "channel_id": channel_id,
         "source": backend.channels[channel_id],
         "phase": phase.value,
         "alert_count": alert_count,
         "pipeline_started": request.app.state.pipeline_started,
+        **config,
     }
 
 
@@ -276,10 +283,16 @@ def get_replay(
 
 @router.get("/snapshot/{track_id}")
 def get_snapshot(
-    track_id: int,
+    track_id: str,
     backend: PipelineBackend = Depends(get_backend),
 ):
-    jpeg = backend.get_snapshot(track_id)
+    # track_id comes as string (to avoid JS precision loss); convert to int
+    # for the backend lookup which uses DeepStream's integer IDs.
+    try:
+        tid = int(track_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid track ID")
+    jpeg = backend.get_snapshot(tid)
     if jpeg is None:
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return Response(content=jpeg, media_type="image/jpeg")

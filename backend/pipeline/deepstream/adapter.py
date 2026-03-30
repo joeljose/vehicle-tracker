@@ -61,7 +61,10 @@ class MjpegExtractor(BufferOperator):
             for batch_id in range(buffer.batch_size):
                 tensor = buffer.extract(batch_id)
                 gpu_arr = cp.from_dlpack(tensor)
-                frame_bgr = cp.asnumpy(gpu_arr)
+                frame_rgb = cp.asnumpy(gpu_arr)
+
+                # Capsfilter outputs RGB; cv2.imencode expects BGR
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
                 # Encode to JPEG
                 _, jpeg_buf = cv2.imencode(
@@ -76,7 +79,7 @@ class MjpegExtractor(BufferOperator):
                     if traj:
                         cx, cy = traj[-1][0], traj[-1][1]
                         detections.append(Detection(
-                            track_id=tid,
+                            track_id=self._reporter._seq_id(tid),
                             class_name=track["label"],
                             bbox=(0, 0, 0, 0),  # OSD already drew boxes
                             confidence=0.0,
@@ -114,6 +117,7 @@ class _ChannelState:
     pipeline: object | None = None  # pyservicemaker Pipeline
     reporter: TrackingReporter | None = None
     best_photo: BestPhotoTracker | None = None
+    mjpeg_extractor: MjpegExtractor | None = None
     roi_polygon: list[tuple[float, float]] | None = None
     entry_exit_lines: dict = field(default_factory=dict)
 
@@ -214,6 +218,15 @@ class DeepStreamPipeline:
             raise KeyError(f"Channel {channel_id} not found")
         return self._states[channel_id].phase
 
+    def get_channel_config(self, channel_id: int) -> dict:
+        """Return the stored ROI/lines config for a channel."""
+        if channel_id not in self._states:
+            raise KeyError(f"Channel {channel_id} not found")
+        state = self._states[channel_id]
+        return {
+            "entry_exit_lines": state.entry_exit_lines or {},
+        }
+
     # -- Configuration --
 
     def set_confidence_threshold(self, threshold: float) -> None:
@@ -301,6 +314,7 @@ class DeepStreamPipeline:
             self._safe_callback(self._frame_callback, result)
 
         mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
+        state.mjpeg_extractor = mjpeg_extractor
         frame_extractor = FrameExtractor(best_photo)
 
         pipeline = Pipeline(f"preview-ch{channel_id}")
@@ -416,6 +430,7 @@ class DeepStreamPipeline:
             self._safe_callback(self._frame_callback, result)
 
         mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
+        state.mjpeg_extractor = mjpeg_extractor
         frame_extractor = FrameExtractor(best_photo)
 
         pipeline = Pipeline(f"analytics-ch{channel_id}")
@@ -513,10 +528,17 @@ class DeepStreamPipeline:
                 state.reporter._finalize_lost_track(tid, sstate)
             state.reporter.stitcher.lost_tracks.clear()
 
-            # Save remaining active track photos
+            # Save remaining active track photos (using sequential IDs)
             if state.best_photo:
                 for tid in list(state.reporter.active_tracks):
-                    state.best_photo.save(tid, state.reporter.snapshot_dir)
+                    seq_tid = state.reporter._seq_id(tid)
+                    state.best_photo.save(seq_tid, state.reporter.snapshot_dir)
+
+        # Disable MJPEG callback before deferred stop to prevent
+        # the old pipeline from interleaving frames with the new one
+        if state.mjpeg_extractor:
+            state.mjpeg_extractor._callback = None
+            state.mjpeg_extractor = None
 
         pipeline = state.pipeline
         state.pipeline = None

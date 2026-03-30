@@ -158,11 +158,15 @@ class BestPhotoTracker:
         Args:
             frame: RGB uint8 array from BufferOperator (after CuPy asnumpy).
         """
-        for track_id, bbox in list(self.pending_crops.items()):
+        # Snapshot and remove only processed entries — .clear() would
+        # discard entries added by the metadata probe for later frames
+        # (which runs ahead due to GStreamer queue decoupling).
+        to_process = dict(self.pending_crops)
+        for track_id, bbox in to_process.items():
             crop = self.crop_from_frame(frame, bbox)
             if crop is not None:
                 self.best_crops[track_id] = crop
-        self.pending_crops.clear()
+            self.pending_crops.pop(track_id, None)
 
     def save(self, track_id: int, output_dir: str) -> str | None:
         """Write the best crop for a track as JPEG and clean up state.
