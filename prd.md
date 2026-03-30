@@ -1,8 +1,8 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.3
-**Status:** M2 Complete
+**Version:** 0.4
+**Status:** M4 Complete (v0.4.0)
 **Last updated:** March 2026
 
 ---
@@ -512,10 +512,10 @@ duration_ms, frames_stationary
 
 | Milestone | Deliverable | Dependencies |
 |---|---|---|
-| M1 -- DeepStream single-channel | Single-channel file input with full DeepStream pipeline: decode, TrafficCamNet detection, NvDCF tracking, ROI polygon filtering, entry/exit line-crossing, direction state machine, stagnant detection, best-photo capture, proximity-based track stitching, idle optimization. All implemented as GStreamer pad probe functions. Structured logging. 153 tests. **COMPLETE.** | None |
-| M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE.** | M1 |
-| M3 -- React UI | Control panel, video panels (MJPEG), alert feed sidebar, stats bar, phase controls, WebSocket integration, ROI polygon and entry/exit line drawing tools on canvas overlay, site config save/load. | M2 |
-| M4 -- Phase 3 replay | `<video>` + canvas overlay for recorded video replay. Animated overlay on frozen frame for YouTube Live. `requestVideoFrameCallback()` for frame-accurate bbox rendering. | M3 |
+| M1 -- DeepStream single-channel | Single-channel file input with full DeepStream pipeline: decode, TrafficCamNet detection, NvDCF tracking, ROI polygon filtering, entry/exit line-crossing, direction state machine, stagnant detection, best-photo capture, proximity-based track stitching, idle optimization. All implemented as GStreamer pad probe functions. Structured logging. 177 tests. **COMPLETE (v0.1.0).** | None |
+| M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE (v0.2.0).** | M1 |
+| M3 -- React UI | React frontend with 4-phase workflow (Setup/Analytics/Review/Teardown), MJPEG video panel, ROI polygon and entry/exit line drawing tools on canvas overlay, alert feed sidebar with filter tabs, stats bar (FPS/tracks/inference), site config save/load, WebSocket integration, phase controls. 286 tests. **COMPLETE (v0.3.0).** | M2 |
+| M4 -- DeepStream-FastAPI integration | DeepStreamPipeline adapter class implementing PipelineBackend Protocol. Per-channel pipeline lifecycle (preview -> analytics -> review). MjpegExtractor BufferOperator for GPU->JPEG at ~15fps. Real-time alert delivery via callbacks. Clip extraction with ffmpeg for replay. EOS auto-transition with phase callback. 312 tests. **COMPLETE (v0.4.0).** | M3 |
 | M5 -- Multi-channel | Single process, `nvstreammux` batching, two channels sharing one inference engine. Independent phase control per channel. | M4 |
 | M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M5 |
 | M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |

@@ -167,6 +167,14 @@ class PipelineBackend(Protocol):
         The dict matches the track_ended WebSocket schema."""
         ...
 
+    def register_phase_callback(
+        self, callback: Callable[[int, ChannelPhase, ChannelPhase], None]
+    ) -> None:
+        """Register callback invoked when a channel auto-transitions phase.
+        Called with (channel_id, new_phase, previous_phase). Used by the API
+        layer to push WS notifications and trigger clip extraction on EOS."""
+        ...
+
     def get_snapshot(self, track_id: int) -> bytes | None:
         """Return the best-photo JPEG crop for a given track, or None."""
         ...
@@ -1857,10 +1865,10 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 
 | Milestone | Description | Key Deliverables |
 |---|---|---|
-| **M1** | DeepStream pipeline — single-channel file input | Detection + NvDCF tracking + ROI + line-crossing + direction FSM + stagnant detection + best-photo capture + track stitching + idle optimization. 153 tests. **COMPLETE.** |
-| **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE.** |
-| **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load. |
-| **M4** | Phase 3 replay | `<video>` + canvas overlay for recorded, animated overlay for YouTube Live, per-alert replay data |
+| **M1** | DeepStream pipeline — single-channel file input | Detection + NvDCF tracking + ROI + line-crossing + direction FSM + stagnant detection + best-photo capture + track stitching + idle optimization. 177 tests. **COMPLETE (v0.1.0).** |
+| **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE (v0.2.0).** |
+| **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load, WebSocket integration. 286 tests. **COMPLETE (v0.3.0).** |
+| **M4** | DeepStream-FastAPI integration | DeepStreamPipeline adapter (PipelineBackend Protocol), per-channel pipeline lifecycle, MjpegExtractor for GPU->JPEG, real-time alerts, clip extraction for replay, EOS auto-transition. 312 tests. **COMPLETE (v0.4.0).** |
 | **M5** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
 | **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic |
 | **M7** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
