@@ -56,7 +56,7 @@ rebuild: ## Force rebuild Docker images (use after Dockerfile changes)
 start: ## Start backend server (uvicorn) inside container
 	@$(MAKE) -s stop-server 2>/dev/null || true
 	@sleep 1
-	@$(BACKEND) bash -c 'cd /app && python3 -m backend.main > /tmp/backend.log 2>&1 &'
+	@$(COMPOSE) exec -d backend bash -c 'cd /app && exec python3 -m backend.main > /tmp/backend.log 2>&1'
 	@echo "Waiting for backend..."
 	@for i in 1 2 3 4 5; do \
 		$(BACKEND) bash -c 'curl -sf http://localhost:8000/channels > /dev/null 2>&1' && break || sleep 1; \
