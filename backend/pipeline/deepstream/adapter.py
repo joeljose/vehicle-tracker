@@ -246,6 +246,9 @@ class DeepStreamPipeline:
 
     def get_snapshot(self, track_id: int) -> bytes | None:
         import cv2
+        from pathlib import Path
+
+        # Try in-memory first (tracks still being processed)
         for state in self._states.values():
             if state.best_photo:
                 crop = state.best_photo.best_crops.get(track_id)
@@ -253,6 +256,12 @@ class DeepStreamPipeline:
                     bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
                     _, buf = cv2.imencode(".jpg", bgr)
                     return buf.tobytes()
+
+        # Fall back to disk (finalized tracks)
+        snapshot_path = Path("snapshots") / f"{track_id}.jpg"
+        if snapshot_path.exists():
+            return snapshot_path.read_bytes()
+
         return None
 
     # -- Thread bridging --

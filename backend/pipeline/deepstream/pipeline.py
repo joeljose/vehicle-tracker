@@ -144,6 +144,7 @@ class TrackingReporter(BatchMetadataOperator):
                             "trajectory": traj,
                             "roi_active": in_roi,
                             "dsm": dsm,
+                            "per_frame_data": [],
                         }
                         if not match:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
@@ -159,6 +160,14 @@ class TrackingReporter(BatchMetadataOperator):
 
                         track_state["last_frame"] = self.frame_count
                         track_state["trajectory"].append(cx, cy, self.frame_count)
+                        track_state["per_frame_data"].append({
+                            "frame": self.frame_count,
+                            "bbox": [int(rect.left), int(rect.top),
+                                     int(rect.width), int(rect.height)],
+                            "centroid": [cx, cy],
+                            "confidence": round(obj_meta.confidence, 3),
+                            "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                        })
                         # Update ROI status (track can move in/out)
                         was_in_roi = track_state["roi_active"]
                         track_state["roi_active"] = in_roi
@@ -235,6 +244,7 @@ class TrackingReporter(BatchMetadataOperator):
                         self.stitcher.lost_tracks[tid]["label"] = track["label"]
                         self.stitcher.lost_tracks[tid]["lifetime"] = lifetime
                         self.stitcher.lost_tracks[tid]["first_frame"] = track["first_frame"]
+                        self.stitcher.lost_tracks[tid]["per_frame_data"] = track.get("per_frame_data", [])
                     else:
                         # Non-ROI track — finalize immediately
                         if self.best_photo:
@@ -301,6 +311,7 @@ class TrackingReporter(BatchMetadataOperator):
                 alert["first_seen_frame"] = stitcher_state.get("first_frame", 0)
                 alert["last_seen_frame"] = self.frame_count
                 alert["trajectory"] = trajectory_full
+                alert["per_frame_data"] = stitcher_state.get("per_frame_data", [])
                 self.transit_alerts.append(alert)
                 logger.info(
                     "TRANSIT: Track #%d: %s -> %s (%s)",
@@ -369,6 +380,7 @@ class TrackingReporter(BatchMetadataOperator):
                     alert["first_seen_frame"] = track_state["first_frame"]
                     alert["last_seen_frame"] = track_state["last_frame"]
                     alert["trajectory"] = track_state["trajectory"].get_full()
+                    alert["per_frame_data"] = track_state.get("per_frame_data", [])
                     self.transit_alerts.append(alert)
                     logger.info(
                         "TRANSIT: Track #%d: %s -> %s (%s)",
