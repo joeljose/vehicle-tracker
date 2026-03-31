@@ -200,6 +200,12 @@ class AlertStore:
     @staticmethod
     def _to_summary(alert: dict) -> dict:
         """Strip heavy fields from an alert for summary use."""
-        exclude = {"per_frame_data", "full_trajectory", "avg_confidence",
-                    "max_confidence", "frames_tracked", "frames_stationary"}
+        exclude = {
+            "per_frame_data",
+            "full_trajectory",
+            "avg_confidence",
+            "max_confidence",
+            "frames_tracked",
+            "frames_stationary",
+        }
         return {k: v for k, v in alert.items() if k not in exclude}

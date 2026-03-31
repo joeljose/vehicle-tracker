@@ -99,8 +99,12 @@ class TestProximityMatching:
         traj_close = _make_trajectory([(150, 200, 10)])
         dsm1 = DirectionStateMachine()
         dsm2 = DirectionStateMachine()
-        stitcher.on_track_lost(track_id=1, trajectory=traj_far, dsm=dsm1, frame_number=10)
-        stitcher.on_track_lost(track_id=2, trajectory=traj_close, dsm=dsm2, frame_number=10)
+        stitcher.on_track_lost(
+            track_id=1, trajectory=traj_far, dsm=dsm1, frame_number=10
+        )
+        stitcher.on_track_lost(
+            track_id=2, trajectory=traj_close, dsm=dsm2, frame_number=10
+        )
         match = stitcher.find_match(position=(155, 200), frame_number=12)
         assert match is not None
         assert match["lost_track_id"] == 2

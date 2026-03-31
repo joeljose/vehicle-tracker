@@ -53,17 +53,27 @@ class ClipExtractor:
                 self._status[alert_id] = "pending"
                 self._pool.submit(
                     self._extract_transit_clip,
-                    alert_id, source, alert, clip_dir,
+                    alert_id,
+                    source,
+                    alert,
+                    clip_dir,
                 )
             elif alert_type == "stagnant_alert":
                 self._status[alert_id] = "pending"
                 self._pool.submit(
                     self._extract_stagnant_frame,
-                    alert_id, source, alert, clip_dir,
+                    alert_id,
+                    source,
+                    alert,
+                    clip_dir,
                 )
 
     def _extract_transit_clip(
-        self, alert_id: str, source: str, alert: dict, clip_dir: Path,
+        self,
+        alert_id: str,
+        source: str,
+        alert: dict,
+        clip_dir: Path,
     ) -> None:
         """Extract a short clip for a transit alert using ffmpeg."""
         first_frame = alert.get("first_seen_frame", 0)
@@ -77,13 +87,19 @@ class ClipExtractor:
         # Try NVENC first, fall back to libx264
         for codec in ("h264_nvenc", "libx264"):
             cmd = [
-                "ffmpeg", "-y",
-                "-ss", f"{start_s:.3f}",
-                "-to", f"{end_s:.3f}",
-                "-i", source,
-                "-c:v", codec,
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{start_s:.3f}",
+                "-to",
+                f"{end_s:.3f}",
+                "-i",
+                source,
+                "-c:v",
+                codec,
                 "-an",  # no audio
-                "-loglevel", "error",
+                "-loglevel",
+                "error",
                 str(output),
             ]
             try:
@@ -103,7 +119,11 @@ class ClipExtractor:
         self._status[alert_id] = "failed"
 
     def _extract_stagnant_frame(
-        self, alert_id: str, source: str, alert: dict, clip_dir: Path,
+        self,
+        alert_id: str,
+        source: str,
+        alert: dict,
+        clip_dir: Path,
     ) -> None:
         """Extract a single frame for a stagnant alert using ffmpeg."""
         # Use the midpoint between first and last seen
@@ -115,12 +135,18 @@ class ClipExtractor:
         output = clip_dir / f"frame_{alert_id}.jpg"
 
         cmd = [
-            "ffmpeg", "-y",
-            "-ss", f"{timestamp_s:.3f}",
-            "-i", source,
-            "-frames:v", "1",
-            "-q:v", "2",
-            "-loglevel", "error",
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{timestamp_s:.3f}",
+            "-i",
+            source,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            "-loglevel",
+            "error",
             str(output),
         ]
         try:
@@ -128,8 +154,11 @@ class ClipExtractor:
             self._clip_paths[alert_id] = output
             self._status[alert_id] = "ready"
             logger.info("Stagnant frame ready: %s", alert_id)
-        except (subprocess.CalledProcessError, FileNotFoundError,
-                subprocess.TimeoutExpired):
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
             logger.warning("Stagnant frame extraction failed for %s", alert_id)
             self._status[alert_id] = "failed"
 
@@ -153,7 +182,8 @@ class ClipExtractor:
         # Clear status entries for this channel's alerts
         # (caller should clear alert store separately)
         to_remove = [
-            aid for aid, path in self._clip_paths.items()
+            aid
+            for aid, path in self._clip_paths.items()
             if str(channel_id) in str(path)
         ]
         for aid in to_remove:

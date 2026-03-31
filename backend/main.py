@@ -38,9 +38,11 @@ def create_app(backend: str = "deepstream") -> FastAPI:
     """
     if backend == "deepstream":
         from backend.pipeline.deepstream.adapter import DeepStreamPipeline
+
         pipeline_backend = DeepStreamPipeline()
     elif backend == "fake":
         from backend.pipeline.fake import FakeBackend
+
         pipeline_backend = FakeBackend()
     else:
         raise ValueError(f"Unknown backend: {backend}")
@@ -91,12 +93,14 @@ def create_app(backend: str = "deepstream") -> FastAPI:
             source = pipeline_backend.channels.get(channel_id, "")
             alerts = alert_store.get_channel_alerts(channel_id)
             clip_extractor.extract_clips(channel_id, source, alerts)
-        ws.enqueue({
-            "type": "phase_changed",
-            "channel": channel_id,
-            "phase": new_phase.value,
-            "previous_phase": previous.value,
-        })
+        ws.enqueue(
+            {
+                "type": "phase_changed",
+                "channel": channel_id,
+                "phase": new_phase.value,
+                "previous_phase": previous.value,
+            }
+        )
 
     pipeline_backend.register_frame_callback(on_frame)
     pipeline_backend.register_alert_callback(on_alert)

@@ -27,10 +27,20 @@ TRANSIT_ALERT = {
     "duration_frames": 300,
     "trajectory": [(100, 200), (150, 250), (200, 300)],
     "per_frame_data": [
-        {"frame": 100, "bbox": (10, 20, 30, 40), "centroid": (25, 40),
-         "confidence": 0.9, "timestamp_ms": 3333},
-        {"frame": 200, "bbox": (50, 60, 30, 40), "centroid": (65, 80),
-         "confidence": 0.85, "timestamp_ms": 6666},
+        {
+            "frame": 100,
+            "bbox": (10, 20, 30, 40),
+            "centroid": (25, 40),
+            "confidence": 0.9,
+            "timestamp_ms": 3333,
+        },
+        {
+            "frame": 200,
+            "bbox": (50, 60, 30, 40),
+            "centroid": (65, 80),
+            "confidence": 0.85,
+            "timestamp_ms": 6666,
+        },
     ],
 }
 
@@ -63,6 +73,7 @@ def seeded_store(app):
 
 
 # -- GET /channels --
+
 
 class TestGetChannels:
     def test_no_pipeline(self, client):
@@ -102,6 +113,7 @@ class TestGetChannels:
 
 # -- GET /channel/{id} --
 
+
 class TestGetChannel:
     def test_returns_channel_state(self, started_client):
         resp = started_client.get("/channel/0")
@@ -129,6 +141,7 @@ class TestGetChannel:
 
 
 # -- Channel filter on GET /alerts --
+
 
 class TestAlertChannelFilter:
     def test_filter_by_channel(self, client, seeded_store):
@@ -160,6 +173,7 @@ class TestAlertChannelFilter:
 
 
 # -- WebSocket types filter --
+
 
 class TestWsTypesFilter:
     def test_type_filter_allows_matching(self):
@@ -201,21 +215,15 @@ class TestWsTypesFilter:
         broadcaster._clients = [(ws, {0}, {"transit_alert"})]
 
         # Channel 0, transit_alert — should pass
-        asyncio.run(broadcaster._broadcast(
-            {"type": "transit_alert", "channel": 0}
-        ))
+        asyncio.run(broadcaster._broadcast({"type": "transit_alert", "channel": 0}))
         assert ws.send_text.call_count == 1
 
         # Channel 1, transit_alert — blocked by channel filter
-        asyncio.run(broadcaster._broadcast(
-            {"type": "transit_alert", "channel": 1}
-        ))
+        asyncio.run(broadcaster._broadcast({"type": "transit_alert", "channel": 1}))
         assert ws.send_text.call_count == 1
 
         # Channel 0, frame_data — blocked by type filter
-        asyncio.run(broadcaster._broadcast(
-            {"type": "frame_data", "channel": 0}
-        ))
+        asyncio.run(broadcaster._broadcast({"type": "frame_data", "channel": 0}))
         assert ws.send_text.call_count == 1
 
     def test_ws_endpoint_parses_types_param(self, client):
@@ -224,6 +232,7 @@ class TestWsTypesFilter:
 
 
 # -- phase_changed WS event --
+
 
 class TestPhaseChangedEvent:
     def test_phase_change_emits_event(self, started_client, app):
@@ -254,6 +263,7 @@ class TestPhaseChangedEvent:
 
 # -- stats_update WS message --
 
+
 class TestStatsUpdate:
     def test_stats_emitted_after_1_second(self, app):
         ws = app.state.ws
@@ -267,14 +277,22 @@ class TestStatsUpdate:
         ws._stats_inference_ms_sum[0] = 0.0
 
         result = FrameResult(
-            channel_id=0, frame_number=100, timestamp_ms=3333,
+            channel_id=0,
+            frame_number=100,
+            timestamp_ms=3333,
             detections=[
-                Detection(track_id=1, class_name="car",
-                          bbox=(10, 20, 30, 40), confidence=0.9,
-                          centroid=(25, 40)),
+                Detection(
+                    track_id=1,
+                    class_name="car",
+                    bbox=(10, 20, 30, 40),
+                    confidence=0.9,
+                    centroid=(25, 40),
+                ),
             ],
             annotated_jpeg=b"\xff\xd8test",
-            inference_ms=5.2, phase="analytics", idle_mode=False,
+            inference_ms=5.2,
+            phase="analytics",
+            idle_mode=False,
         )
         ws.on_frame(result)
 
@@ -305,9 +323,14 @@ class TestStatsUpdate:
         ws._stats_inference_ms_sum[0] = 0.0
 
         result = FrameResult(
-            channel_id=0, frame_number=1, timestamp_ms=33,
-            detections=[], annotated_jpeg=b"\xff\xd8test",
-            inference_ms=3.0, phase="setup", idle_mode=False,
+            channel_id=0,
+            frame_number=1,
+            timestamp_ms=33,
+            detections=[],
+            annotated_jpeg=b"\xff\xd8test",
+            inference_ms=3.0,
+            phase="setup",
+            idle_mode=False,
         )
         ws.on_frame(result)
 
@@ -320,6 +343,7 @@ class TestStatsUpdate:
 
 
 # -- timestamp_ms in per_frame_data --
+
 
 class TestTimestampMsInPerFrameData:
     def test_transit_alert_includes_timestamp_ms(self, app):
@@ -336,8 +360,12 @@ class TestTimestampMsInPerFrameData:
         alert_no_ts = {
             **TRANSIT_ALERT,
             "per_frame_data": [
-                {"frame": 1, "bbox": (0, 0, 10, 10), "centroid": (5, 5),
-                 "confidence": 0.8},
+                {
+                    "frame": 1,
+                    "bbox": (0, 0, 10, 10),
+                    "centroid": (5, 5),
+                    "confidence": 0.8,
+                },
             ],
         }
         alert_id = store.add_transit_alert(alert_no_ts, channel=0)
@@ -347,62 +375,87 @@ class TestTimestampMsInPerFrameData:
 
 # -- SiteConfigRequest Pydantic model --
 
+
 class TestSiteConfigValidation:
     @pytest.fixture(autouse=True)
     def _redirect_sites(self, tmp_path, monkeypatch):
         import backend.config.site_config as sc
+
         monkeypatch.setattr(sc, "SITES_DIR", tmp_path)
 
     def test_valid_config(self, client):
-        resp = client.post("/site/config", json={
-            "site_id": "junction_a",
-            "roi_polygon": [[100, 200], [300, 400], [500, 600]],
-            "entry_exit_lines": {
-                "north": {"label": "741-North", "start": [100, 50], "end": [200, 50]},
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "junction_a",
+                "roi_polygon": [[100, 200], [300, 400], [500, 600]],
+                "entry_exit_lines": {
+                    "north": {
+                        "label": "741-North",
+                        "start": [100, 50],
+                        "end": [200, 50],
+                    },
+                },
             },
-        })
+        )
         assert resp.status_code == 200
         assert resp.json() == {"status": "saved"}
 
     def test_missing_site_id(self, client):
-        resp = client.post("/site/config", json={
-            "roi_polygon": [[0, 0], [1, 1], [2, 2]],
-        })
+        resp = client.post(
+            "/site/config",
+            json={
+                "roi_polygon": [[0, 0], [1, 1], [2, 2]],
+            },
+        )
         assert resp.status_code == 422
 
     def test_too_few_vertices(self, client):
-        resp = client.post("/site/config", json={
-            "site_id": "bad",
-            "roi_polygon": [[0, 0], [1, 1]],
-        })
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "bad",
+                "roi_polygon": [[0, 0], [1, 1]],
+            },
+        )
         assert resp.status_code == 422
 
     def test_empty_polygon(self, client):
-        resp = client.post("/site/config", json={
-            "site_id": "bad",
-            "roi_polygon": [],
-        })
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "bad",
+                "roi_polygon": [],
+            },
+        )
         assert resp.status_code == 422
 
     def test_no_entry_exit_lines(self, client):
-        resp = client.post("/site/config", json={
-            "site_id": "minimal",
-            "roi_polygon": [[0, 0], [1, 1], [2, 2]],
-        })
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "minimal",
+                "roi_polygon": [[0, 0], [1, 1], [2, 2]],
+            },
+        )
         assert resp.status_code == 200
 
     def test_invalid_entry_exit_line(self, client):
-        resp = client.post("/site/config", json={
-            "site_id": "bad",
-            "roi_polygon": [[0, 0], [1, 1], [2, 2]],
-            "entry_exit_lines": {
-                "north": {"start": [100, 50]},  # missing label and end
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "bad",
+                "roi_polygon": [[0, 0], [1, 1], [2, 2]],
+                "entry_exit_lines": {
+                    "north": {"start": [100, 50]},  # missing label and end
+                },
             },
-        })
+        )
         assert resp.status_code == 422
 
 
 # -- CORS --
+
 
 class TestCors:
     def test_cors_headers_present(self, client):
@@ -413,7 +466,9 @@ class TestCors:
                 "Access-Control-Request-Method": "GET",
             },
         )
-        assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        assert (
+            resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        )
 
     def test_cors_rejects_other_origin(self, client):
         resp = client.options(
@@ -427,6 +482,7 @@ class TestCors:
 
 
 # -- AlertStore.count_by_channel --
+
 
 class TestCountByChannel:
     def test_count_empty(self, app):

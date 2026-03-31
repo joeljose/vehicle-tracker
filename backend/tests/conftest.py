@@ -21,6 +21,7 @@ logging.basicConfig(
 @pytest.fixture
 def app():
     from backend.main import create_app
+
     return create_app(backend="fake")
 
 
@@ -34,13 +35,22 @@ def _fake_video_files(tmp_path, monkeypatch):
     """Create fake video files so source validation passes in tests."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    for name in ("video.mp4", "a.mp4", "b.mp4", "c.mp4", "test.mp4",
-                  "lytle_south.mp4", "741_73.mp4"):
+    for name in (
+        "video.mp4",
+        "a.mp4",
+        "b.mp4",
+        "c.mp4",
+        "test.mp4",
+        "lytle_south.mp4",
+        "741_73.mp4",
+    ):
         (data_dir / name).write_bytes(b"fake")
     # Patch the source paths used in tests to point to tmp_path
     original_exists = Path.exists
+
     def patched_exists(self):
         if str(self).startswith("/data/"):
             return (tmp_path / str(self).lstrip("/")).exists()
         return original_exists(self)
+
     monkeypatch.setattr(Path, "exists", patched_exists)

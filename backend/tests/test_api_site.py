@@ -9,6 +9,7 @@ import pytest
 def sites_dir(tmp_path, monkeypatch):
     """Redirect site config storage to a temp directory."""
     import backend.config.site_config as sc
+
     monkeypatch.setattr(sc, "SITES_DIR", tmp_path)
     return tmp_path
 
@@ -35,14 +36,19 @@ class TestSaveConfig:
         assert len(data["roi_polygon"]) == 4
 
     def test_save_missing_site_id(self, client, sites_dir):
-        resp = client.post("/site/config", json={"roi_polygon": [[0, 0], [1, 1], [2, 2]]})
+        resp = client.post(
+            "/site/config", json={"roi_polygon": [[0, 0], [1, 1], [2, 2]]}
+        )
         assert resp.status_code == 422
 
     def test_save_too_few_roi_vertices(self, client, sites_dir):
-        resp = client.post("/site/config", json={
-            "site_id": "bad",
-            "roi_polygon": [[0, 0], [1, 1]],
-        })
+        resp = client.post(
+            "/site/config",
+            json={
+                "site_id": "bad",
+                "roi_polygon": [[0, 0], [1, 1]],
+            },
+        )
         assert resp.status_code == 422
 
 

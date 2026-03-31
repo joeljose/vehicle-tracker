@@ -36,8 +36,8 @@ def test_concave_polygon():
     # L-shape: bottom-left corner cut out
     l_shape = [(0, 0), (10, 0), (10, 10), (5, 10), (5, 5), (0, 5)]
 
-    assert point_in_polygon((2, 2), l_shape) is True   # inside bottom
-    assert point_in_polygon((7, 7), l_shape) is True   # inside top-right
+    assert point_in_polygon((2, 2), l_shape) is True  # inside bottom
+    assert point_in_polygon((7, 7), l_shape) is True  # inside top-right
     assert point_in_polygon((2, 7), l_shape) is False  # in the cut-out
 
 

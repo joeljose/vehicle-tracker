@@ -90,13 +90,15 @@ class MjpegExtractor(BufferOperator):
                     traj = track["trajectory"].get_full()
                     if traj:
                         cx, cy = traj[-1][0], traj[-1][1]
-                        detections.append(Detection(
-                            track_id=self._reporter._seq_id(tid),
-                            class_name=track["label"],
-                            bbox=(0, 0, 0, 0),  # OSD already drew boxes
-                            confidence=0.0,
-                            centroid=(cx, cy),
-                        ))
+                        detections.append(
+                            Detection(
+                                track_id=self._reporter._seq_id(tid),
+                                class_name=track["label"],
+                                bbox=(0, 0, 0, 0),  # OSD already drew boxes
+                                confidence=0.0,
+                                centroid=(cx, cy),
+                            )
+                        )
 
                 result = FrameResult(
                     channel_id=self._channel_id,
@@ -104,11 +106,7 @@ class MjpegExtractor(BufferOperator):
                     timestamp_ms=int(self._reporter.frame_count * (1000 / 30)),
                     detections=detections,
                     annotated_jpeg=jpeg_bytes,
-                    phase=(
-                        "analytics"
-                        if self._reporter.roi_polygon
-                        else "setup"
-                    ),
+                    phase=("analytics" if self._reporter.roi_polygon else "setup"),
                     idle_mode=self._reporter.idle_optimizer.is_idle,
                 )
                 self._callback(result)
@@ -213,8 +211,11 @@ class DeepStreamPipeline:
         state = self._states[channel_id]
         state.roi_polygon = roi_polygon
         state.entry_exit_lines = entry_exit_lines
-        logger.info("Channel %d configured with ROI + %d lines",
-                     channel_id, len(entry_exit_lines))
+        logger.info(
+            "Channel %d configured with ROI + %d lines",
+            channel_id,
+            len(entry_exit_lines),
+        )
 
     def set_channel_phase(self, channel_id: int, phase: ChannelPhase) -> None:
         if channel_id not in self.channels:
@@ -233,13 +234,10 @@ class DeepStreamPipeline:
         else:
             state.phase = phase
 
-        logger.info("Channel %d: %s -> %s",
-                     channel_id, old_phase.value, phase.value)
+        logger.info("Channel %d: %s -> %s", channel_id, old_phase.value, phase.value)
 
         if old_phase != phase:
-            self._safe_callback(
-                self._phase_callback, channel_id, phase, old_phase
-            )
+            self._safe_callback(self._phase_callback, channel_id, phase, old_phase)
 
     def get_channel_phase(self, channel_id: int) -> ChannelPhase:
         if channel_id not in self._states:
@@ -265,19 +263,13 @@ class DeepStreamPipeline:
 
     # -- Callbacks --
 
-    def register_frame_callback(
-        self, callback: Callable[[FrameResult], None]
-    ) -> None:
+    def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         self._frame_callback = callback
 
-    def register_alert_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_alert_callback(self, callback: Callable[[dict], None]) -> None:
         self._alert_callback = callback
 
-    def register_track_ended_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_track_ended_callback(self, callback: Callable[[dict], None]) -> None:
         self._track_ended_callback = callback
 
     def register_phase_callback(self, callback) -> None:
@@ -332,23 +324,31 @@ class DeepStreamPipeline:
 
         pipeline = Pipeline("shared")
 
-        pipeline.add("nvstreammux", "mux", {
-            "batch-size": 8,
-            "batched-push-timeout": 33000,
-            "width": 1920,
-            "height": 1080,
-        })
+        pipeline.add(
+            "nvstreammux",
+            "mux",
+            {
+                "batch-size": 8,
+                "batched-push-timeout": 33000,
+                "width": 1920,
+                "height": 1080,
+            },
+        )
 
         pipeline.add("nvinfer", "infer", {"config-file-path": PGIE_CONFIG})
         pipeline.link("mux", "infer")
 
-        pipeline.add("nvtracker", "tracker", {
-            "tracker-width": 640,
-            "tracker-height": 384,
-            "gpu-id": 0,
-            "ll-lib-file": TRACKER_LIB,
-            "ll-config-file": TRACKER_CONFIG,
-        })
+        pipeline.add(
+            "nvtracker",
+            "tracker",
+            {
+                "tracker-width": 640,
+                "tracker-height": 384,
+                "gpu-id": 0,
+                "ll-lib-file": TRACKER_LIB,
+                "ll-config-file": TRACKER_CONFIG,
+            },
+        )
         pipeline.link("infer", "tracker")
 
         self._batch_router = BatchMetadataRouter({})
@@ -415,7 +415,8 @@ class DeepStreamPipeline:
 
         # Rebuild with all active channels
         active = [
-            cid for cid, s in self._states.items()
+            cid
+            for cid, s in self._states.items()
             if s.phase in (ChannelPhase.SETUP, ChannelPhase.ANALYTICS)
         ]
         if not active:
@@ -432,9 +433,14 @@ class DeepStreamPipeline:
         logger.info("Shared pipeline rebuilt with %d channels", len(active))
 
     def _add_channel_to_pipeline(
-        self, channel_id: int, *, file_loop: bool = True,
-        roi_polygon=None, lines=None,
-        alert_callback=None, track_ended_callback=None,
+        self,
+        channel_id: int,
+        *,
+        file_loop: bool = True,
+        roi_polygon=None,
+        lines=None,
+        alert_callback=None,
+        track_ended_callback=None,
         eos_callback=None,
     ) -> None:
         """Add a source and per-channel output branch to the shared pipeline.
@@ -501,9 +507,13 @@ class DeepStreamPipeline:
         pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
         pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
         pipeline.add("nvvideoconvert", conv_name, {})
-        pipeline.add("capsfilter", caps_name, {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
+        pipeline.add(
+            "capsfilter",
+            caps_name,
+            {
+                "caps": "video/x-raw(memory:NVMM),format=RGB",
+            },
+        )
         pipeline.add("fakesink", sink_name, {"sync": True})
 
         pipeline.link(("demux", q_name), ("src_%u", ""))
@@ -516,15 +526,23 @@ class DeepStreamPipeline:
         # Add source to mux AFTER demux branch is ready
         src_name = f"src_{src_idx}"
         state._src_name = src_name
-        pipeline.add("nvurisrcbin", src_name, {
-            "uri": file_uri,
-            "file-loop": file_loop,
-        })
+        pipeline.add(
+            "nvurisrcbin",
+            src_name,
+            {
+                "uri": file_uri,
+                "file-loop": file_loop,
+            },
+        )
         pipeline.link((src_name, "mux"), ("", "sink_%u"))
 
         state.pipeline = pipeline
-        logger.info("Channel %d added to shared pipeline (src_idx=%d, loop=%s)",
-                     channel_id, src_idx, file_loop)
+        logger.info(
+            "Channel %d added to shared pipeline (src_idx=%d, loop=%s)",
+            channel_id,
+            src_idx,
+            file_loop,
+        )
 
     def _destroy_shared_pipeline(self) -> None:
         """Tear down the shared pipeline."""
@@ -569,6 +587,7 @@ class DeepStreamPipeline:
         """Remove snapshot directory for a channel."""
         import shutil
         from pathlib import Path
+
         snapshot_dir = Path("snapshots") / str(channel_id)
         if snapshot_dir.exists():
             shutil.rmtree(snapshot_dir, ignore_errors=True)
@@ -615,6 +634,7 @@ class DeepStreamPipeline:
         state = self._states[channel_id]
 
         from backend.pipeline.direction import LineSeg
+
         lines = {}
         if state.entry_exit_lines:
             for arm_id, line_data in state.entry_exit_lines.items():
@@ -665,12 +685,9 @@ class DeepStreamPipeline:
         if "eos" in msg_str:
             logger.info("Pipeline-level EOS received")
             if self._batch_router is not None:
-                self._safe_callback(
-                    lambda: self._batch_router.fire_all_pending_eos()
-                )
+                self._safe_callback(lambda: self._batch_router.fire_all_pending_eos())
 
     # -- Legacy methods removed in M5-P2 --
     # _start_preview_pipeline, _start_analytics_pipeline, _stop_channel_pipeline
     # replaced by shared pipeline: _add_channel_to_pipeline, _add_analytics_source,
     # _soft_remove_source
-

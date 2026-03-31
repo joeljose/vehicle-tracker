@@ -116,18 +116,20 @@ def test_summary_report():
         inferred = sum(
             1 for a in summary["transit_alerts"] if a.get("method") != "confirmed"
         )
-        results.append({
-            "site": site_id,
-            "frames": summary["frames"],
-            "detections": summary["total_detections"],
-            "tracks": summary["unique_tracks"],
-            "merges": summary["merges"],
-            "transits_confirmed": confirmed,
-            "transits_inferred": inferred,
-            "calibrated_lines": f"{calibrated}/{len(calibrations)}",
-            "photos": len(jpegs),
-            "fps": summary["fps"],
-        })
+        results.append(
+            {
+                "site": site_id,
+                "frames": summary["frames"],
+                "detections": summary["total_detections"],
+                "tracks": summary["unique_tracks"],
+                "merges": summary["merges"],
+                "transits_confirmed": confirmed,
+                "transits_inferred": inferred,
+                "calibrated_lines": f"{calibrated}/{len(calibrations)}",
+                "photos": len(jpegs),
+                "fps": summary["fps"],
+            }
+        )
 
     # Print report
     print("\n" + "=" * 70)
@@ -139,7 +141,9 @@ def test_summary_report():
         print(f"  Detections:  {r['detections']}")
         print(f"  Tracks:      {r['tracks']}")
         print(f"  Merges:      {r['merges']}")
-        print(f"  Transits:    {r['transits_confirmed']} confirmed, {r['transits_inferred']} inferred")
+        print(
+            f"  Transits:    {r['transits_confirmed']} confirmed, {r['transits_inferred']} inferred"
+        )
         print(f"  Calibration: {r['calibrated_lines']} lines")
         print(f"  Photos:      {r['photos']}")
         print(f"  FPS:         {r['fps']:.1f}")

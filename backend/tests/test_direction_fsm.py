@@ -15,10 +15,16 @@ from backend.pipeline.direction import (
 # determines the entry/exit arm.
 ROI_CENTROID = (500, 200)
 ARMS = {
-    "north": LineSeg(label="North", start=(400, 100), end=(600, 100)),  # top edge, y=100
-    "south": LineSeg(label="South", start=(400, 300), end=(600, 300)),  # bottom edge, y=300
-    "east": LineSeg(label="East", start=(600, 100), end=(600, 300)),    # right edge, x=600
-    "west": LineSeg(label="West", start=(400, 100), end=(400, 300)),    # left edge, x=400
+    "north": LineSeg(
+        label="North", start=(400, 100), end=(600, 100)
+    ),  # top edge, y=100
+    "south": LineSeg(
+        label="South", start=(400, 300), end=(600, 300)
+    ),  # bottom edge, y=300
+    "east": LineSeg(
+        label="East", start=(600, 100), end=(600, 300)
+    ),  # right edge, x=600
+    "west": LineSeg(label="West", start=(400, 100), end=(400, 300)),  # left edge, x=400
 }
 
 
@@ -113,7 +119,7 @@ def test_dsm_inferred_both_on_loss():
     assert result is not None
     assert result["method"] == "inferred"
     assert result["entry_arm"] == "north"  # starts near north edge
-    assert result["exit_arm"] == "east"    # ends near east edge
+    assert result["exit_arm"] == "east"  # ends near east edge
 
 
 def test_dsm_no_inference_same_arm():
@@ -121,8 +127,8 @@ def test_dsm_no_inference_same_arm():
     dsm = DirectionStateMachine()
 
     # Starts near north edge, loops back to north edge
-    traj = [(500, 110 + i * 10, i) for i in range(10)]         # moves south
-    traj += [(500, 210 - i * 10, 10 + i) for i in range(10)]   # back toward north
+    traj = [(500, 110 + i * 10, i) for i in range(10)]  # moves south
+    traj += [(500, 210 - i * 10, 10 + i) for i in range(10)]  # back toward north
     result = dsm.on_track_lost(traj, ARMS, roi_centroid=ROI_CENTROID)
     # entry = north, exit = north -> same arm -> None
     assert result is None
@@ -224,7 +230,11 @@ def test_dsm_exit_without_entry_too_short():
     # Only 3 points — nearest_arm needs ≥4 to infer
     traj = [(500, 280, 0), (500, 290, 1), (500, 300, 2)]
     result = dsm.on_crossing(
-        "south", "South", "exit", trajectory=traj, arms=ARMS,
+        "south",
+        "South",
+        "exit",
+        trajectory=traj,
+        arms=ARMS,
         roi_centroid=ROI_CENTROID,
     )
     assert result is None
@@ -237,7 +247,11 @@ def test_dsm_exit_without_entry_inferred():
     # Starts near north edge (y=110), exits south
     traj = [(500, 110 + i * 10, i) for i in range(10)]
     result = dsm.on_crossing(
-        "south", "South", "exit", trajectory=traj, arms=ARMS,
+        "south",
+        "South",
+        "exit",
+        trajectory=traj,
+        arms=ARMS,
         roi_centroid=ROI_CENTROID,
     )
     assert result is not None

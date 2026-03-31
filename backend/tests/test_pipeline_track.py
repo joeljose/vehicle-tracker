@@ -88,7 +88,6 @@ def test_tracker_annotated_output(cleanup_output):
     assert os.path.getsize(output) > 1000, "Output MP4 too small"
 
 
-
 def test_shadow_tracking_age():
     """Tracker config has maxShadowTrackingAge=150 (5s at 30fps)."""
     import yaml
@@ -228,10 +227,10 @@ def test_line_crossing_logged(caplog):
     # Use 741_73 clip with 741_73 config (ROI matches this camera)
     with caplog.at_level("INFO"):
         run_pipeline(
-        str(CLIP_741_73),
-        roi_polygon=config.roi_polygon,
-        lines=lines,
-    )
+            str(CLIP_741_73),
+            roi_polygon=config.roi_polygon,
+            lines=lines,
+        )
 
     # Should have crossing events or at least calibration observations
     # (741_73 10s clip may be sparse — just verify no errors)

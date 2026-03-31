@@ -17,8 +17,18 @@ TRANSIT_ALERT = {
     "duration_frames": 300,
     "trajectory": [(100, 200), (150, 250), (200, 300)],
     "per_frame_data": [
-        {"frame": 100, "bbox": (10, 20, 30, 40), "centroid": (25, 40), "confidence": 0.9},
-        {"frame": 200, "bbox": (50, 60, 30, 40), "centroid": (65, 80), "confidence": 0.85},
+        {
+            "frame": 100,
+            "bbox": (10, 20, 30, 40),
+            "centroid": (25, 40),
+            "confidence": 0.9,
+        },
+        {
+            "frame": 200,
+            "bbox": (50, 60, 30, 40),
+            "centroid": (65, 80),
+            "confidence": 0.85,
+        },
     ],
 }
 

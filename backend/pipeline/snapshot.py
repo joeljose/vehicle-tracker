@@ -145,8 +145,15 @@ class BestPhotoTracker:
         fill_y2 = dst_y2 - clip_bottom
 
         # Copy frame content into result
-        if fill_x2 > fill_x1 and fill_y2 > fill_y1 and src_x2 > src_x1 and src_y2 > src_y1:
-            result[fill_y1:fill_y2, fill_x1:fill_x2, :] = frame[src_y1:src_y2, src_x1:src_x2, :]
+        if (
+            fill_x2 > fill_x1
+            and fill_y2 > fill_y1
+            and src_x2 > src_x1
+            and src_y2 > src_y1
+        ):
+            result[fill_y1:fill_y2, fill_x1:fill_x2, :] = frame[
+                src_y1:src_y2, src_x1:src_x2, :
+            ]
 
         return result
 
@@ -198,7 +205,10 @@ class BestPhotoTracker:
 
         logger.info(
             "Track #%d: best photo saved (score=%d, %dx%d crop)",
-            track_id, score, w, h,
+            track_id,
+            score,
+            w,
+            h,
         )
 
         # Clean up

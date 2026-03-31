@@ -19,8 +19,18 @@ def _make_transit_alert(**overrides) -> dict:
         "duration_frames": 295,
         "trajectory": [(470, 338, 1001), (473, 340, 1002)],
         "per_frame_data": [
-            {"frame": 1001, "bbox": (412, 305, 129, 73), "centroid": (476, 341), "confidence": 0.89},
-            {"frame": 1002, "bbox": (414, 306, 130, 74), "centroid": (479, 343), "confidence": 0.95},
+            {
+                "frame": 1001,
+                "bbox": (412, 305, 129, 73),
+                "centroid": (476, 341),
+                "confidence": 0.89,
+            },
+            {
+                "frame": 1002,
+                "bbox": (414, 306, 130, 74),
+                "centroid": (479, 343),
+                "confidence": 0.95,
+            },
         ],
     }
     alert.update(overrides)

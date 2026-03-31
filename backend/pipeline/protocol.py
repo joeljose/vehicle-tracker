@@ -94,27 +94,21 @@ class PipelineBackend(Protocol):
         """Set nvinfer interval (0=every frame, 15=idle mode)."""
         ...
 
-    def register_frame_callback(
-        self, callback: Callable[[FrameResult], None]
-    ) -> None:
+    def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         """Register callback invoked per-channel per-frame with detection results.
 
         The FastAPI layer uses this to feed WebSocket broadcaster and MJPEG endpoints.
         """
         ...
 
-    def register_alert_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_alert_callback(self, callback: Callable[[dict], None]) -> None:
         """Register callback invoked when a transit or stagnant alert is generated.
 
         The dict matches the AlertStore input format (pipeline-side alert).
         """
         ...
 
-    def register_track_ended_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_track_ended_callback(self, callback: Callable[[dict], None]) -> None:
         """Register callback invoked when a track ends.
 
         The dict matches the track_ended WebSocket schema.

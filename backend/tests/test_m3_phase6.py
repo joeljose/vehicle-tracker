@@ -22,10 +22,20 @@ TRANSIT_ALERT = {
     "duration_frames": 300,
     "trajectory": [(100, 200), (150, 250)],
     "per_frame_data": [
-        {"frame": 100, "bbox": (10, 20, 30, 40), "centroid": (25, 40),
-         "confidence": 0.9, "timestamp_ms": 3333},
-        {"frame": 400, "bbox": (50, 60, 30, 40), "centroid": (65, 80),
-         "confidence": 0.85, "timestamp_ms": 13333},
+        {
+            "frame": 100,
+            "bbox": (10, 20, 30, 40),
+            "centroid": (25, 40),
+            "confidence": 0.9,
+            "timestamp_ms": 3333,
+        },
+        {
+            "frame": 400,
+            "bbox": (50, 60, 30, 40),
+            "centroid": (65, 80),
+            "confidence": 0.85,
+            "timestamp_ms": 13333,
+        },
     ],
 }
 
@@ -58,6 +68,7 @@ def seeded_alerts(app):
 
 # -- ClipExtractor unit tests --
 
+
 class TestClipExtractor:
     def test_initial_status_none(self, app):
         extractor = app.state.clip_extractor
@@ -82,6 +93,7 @@ class TestClipExtractor:
 
 # -- AlertStore.get_channel_alerts --
 
+
 class TestGetChannelAlerts:
     def test_returns_full_alerts(self, app, seeded_alerts):
         store = app.state.alert_store
@@ -97,6 +109,7 @@ class TestGetChannelAlerts:
 
 
 # -- Replay endpoint --
+
 
 class TestReplayEndpoint:
     def test_alert_not_found(self, client):
@@ -133,7 +146,9 @@ class TestReplayEndpoint:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "video/mp4"
 
-    def test_200_stagnant_frame_ready(self, started_client, app, seeded_alerts, tmp_path):
+    def test_200_stagnant_frame_ready(
+        self, started_client, app, seeded_alerts, tmp_path
+    ):
         _, s_id = seeded_alerts
         frame = tmp_path / f"frame_{s_id}.jpg"
         frame.write_bytes(b"\xff\xd8\xff\xe0")  # minimal JPEG header
@@ -146,8 +161,11 @@ class TestReplayEndpoint:
 
 # -- Phase transition triggers clip extraction --
 
+
 class TestPhaseTransitionClipExtraction:
-    def test_analytics_to_review_triggers_extraction(self, started_client, app, seeded_alerts):
+    def test_analytics_to_review_triggers_extraction(
+        self, started_client, app, seeded_alerts
+    ):
         # Move to analytics first
         started_client.post("/channel/0/phase", json=ANALYTICS_PHASE_BODY)
 
@@ -166,6 +184,7 @@ class TestPhaseTransitionClipExtraction:
 
 
 # -- Cleanup on channel remove --
+
 
 class TestCleanupOnRemove:
     def test_channel_remove_cleans_clips(self, started_client, app):

@@ -30,7 +30,9 @@ class WsBroadcaster:
         self._drain_task: asyncio.Task | None = None
         # Stats tracking for stats_update (per channel)
         self._stats_last_emit: dict[int, float] = {}  # channel_id -> last emit time
-        self._stats_frame_count: dict[int, int] = {}  # channel_id -> frames since last emit
+        self._stats_frame_count: dict[
+            int, int
+        ] = {}  # channel_id -> frames since last emit
         self._stats_inference_ms_sum: dict[int, float] = {}  # channel_id -> sum for avg
 
     async def start(self) -> None:
@@ -109,18 +111,22 @@ class WsBroadcaster:
             frames = self._stats_frame_count[ch]
             elapsed = now - last if last > 0 else 1.0
             fps = round(frames / elapsed, 1)
-            avg_inference = round(
-                self._stats_inference_ms_sum[ch] / frames, 1
-            ) if frames > 0 else 0.0
-            self.enqueue({
-                "type": "stats_update",
-                "channel": ch,
-                "fps": fps,
-                "active_tracks": len(result.detections),
-                "inference_ms": avg_inference,
-                "phase": result.phase,
-                "idle_mode": result.idle_mode,
-            })
+            avg_inference = (
+                round(self._stats_inference_ms_sum[ch] / frames, 1)
+                if frames > 0
+                else 0.0
+            )
+            self.enqueue(
+                {
+                    "type": "stats_update",
+                    "channel": ch,
+                    "fps": fps,
+                    "active_tracks": len(result.detections),
+                    "inference_ms": avg_inference,
+                    "phase": result.phase,
+                    "idle_mode": result.idle_mode,
+                }
+            )
             self._stats_last_emit[ch] = now
             self._stats_frame_count[ch] = 0
             self._stats_inference_ms_sum[ch] = 0.0

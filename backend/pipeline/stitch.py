@@ -78,7 +78,8 @@ class TrackStitcher:
             can do final processing (direction inference, best-photo save).
         """
         expired_ids = [
-            tid for tid, state in self.lost_tracks.items()
+            tid
+            for tid, state in self.lost_tracks.items()
             if frame_number - state["lost_frame"] > self.max_age_frames
         ]
         expired = [(tid, self.lost_tracks.pop(tid)) for tid in expired_ids]

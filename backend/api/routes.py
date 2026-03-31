@@ -1,6 +1,9 @@
 """Pipeline control REST endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import logging
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from backend.api.deps import get_alert_store, get_backend, get_clip_extractor
@@ -9,6 +12,7 @@ from backend.api.models import (
     ChannelAddedResponse,
     PhaseResponse,
     RemoveChannelRequest,
+    ResolvingResponse,
     SetPhaseRequest,
     SiteConfigRequest,
     StatusResponse,
@@ -19,6 +23,9 @@ from backend.config.site_config import SiteConfig
 from backend.pipeline.alerts import AlertStore
 from backend.pipeline.clip_extractor import ClipExtractor
 from backend.pipeline.protocol import ChannelPhase, PipelineBackend
+from backend.pipeline.source_resolver import is_youtube_url, resolve_source
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -35,12 +42,14 @@ def list_channels(
     for channel_id, source in backend.channels.items():
         phase = backend.get_channel_phase(channel_id)
         alert_count = alert_store.count_by_channel(channel_id)
-        channels.append({
-            "channel_id": channel_id,
-            "source": source,
-            "phase": phase.value,
-            "alert_count": alert_count,
-        })
+        channels.append(
+            {
+                "channel_id": channel_id,
+                "source": source,
+                "phase": phase.value,
+                "alert_count": alert_count,
+            }
+        )
     return {"channels": channels, "pipeline_started": True}
 
 
@@ -54,11 +63,13 @@ def start_pipeline(
     except RuntimeError:
         raise HTTPException(status_code=409, detail="Pipeline already started")
     request.app.state.pipeline_started = True
-    request.app.state.ws.enqueue({
-        "type": "pipeline_event",
-        "event": "started",
-        "detail": "Pipeline started",
-    })
+    request.app.state.ws.enqueue(
+        {
+            "type": "pipeline_event",
+            "event": "started",
+            "detail": "Pipeline started",
+        }
+    )
     return StatusResponse(status="started")
 
 
@@ -77,11 +88,13 @@ def stop_pipeline(
     request.app.state.next_channel_id = 0
     clip_extractor.cleanup_all()
     alert_store.clear()
-    request.app.state.ws.enqueue({
-        "type": "pipeline_event",
-        "event": "stopped",
-        "detail": "Pipeline stopped",
-    })
+    request.app.state.ws.enqueue(
+        {
+            "type": "pipeline_event",
+            "event": "stopped",
+            "detail": "Pipeline stopped",
+        }
+    )
     return StatusResponse(status="stopped")
 
 
@@ -112,17 +125,33 @@ def get_channel(
     }
 
 
-@router.post("/channel/add", response_model=ChannelAddedResponse)
-def add_channel(
+@router.post("/channel/add")
+async def add_channel(
     body: AddChannelRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     backend: PipelineBackend = Depends(get_backend),
 ):
     if not request.app.state.pipeline_started:
         raise HTTPException(status_code=409, detail="Pipeline not started")
-    # Validate source file exists (skip for URLs)
+
+    if is_youtube_url(body.source):
+        # YouTube URLs resolve asynchronously — return 202 immediately
+        request_id = str(uuid.uuid4())
+        background_tasks.add_task(
+            _resolve_and_add_channel, request.app, body.source, request_id
+        )
+        return JSONResponse(
+            status_code=202,
+            content=ResolvingResponse(
+                status="resolving", request_id=request_id
+            ).model_dump(),
+        )
+
+    # File sources: validate and add synchronously
     if not body.source.startswith(("http://", "https://", "rtsp://")):
         from pathlib import Path
+
         source_path = Path(body.source)
         if source_path.is_absolute() and not source_path.exists():
             raise HTTPException(
@@ -133,6 +162,41 @@ def add_channel(
     request.app.state.next_channel_id += 1
     backend.add_channel(channel_id, body.source)
     return ChannelAddedResponse(channel_id=channel_id)
+
+
+async def _resolve_and_add_channel(app, source: str, request_id: str) -> None:
+    """Background task: resolve YouTube URL, then add channel."""
+    ws = app.state.ws
+    backend = app.state.backend
+    try:
+        resolved = await resolve_source(source)
+        channel_id = app.state.next_channel_id
+        app.state.next_channel_id += 1
+        backend.add_channel(channel_id, resolved.stream_url)
+        # Store the original YouTube URL for recovery/display
+        if not hasattr(app.state, "youtube_sources"):
+            app.state.youtube_sources = {}
+        app.state.youtube_sources[channel_id] = source
+        ws.enqueue(
+            {
+                "type": "channel_added",
+                "channel": channel_id,
+                "source": source,
+                "source_type": "youtube_live",
+                "request_id": request_id,
+            }
+        )
+        log.info("YouTube channel %d added: %s", channel_id, source)
+    except (ValueError, TimeoutError) as exc:
+        ws.enqueue(
+            {
+                "type": "resolution_failed",
+                "source": source,
+                "request_id": request_id,
+                "error": str(exc),
+            }
+        )
+        log.warning("YouTube resolution failed for %s: %s", source, exc)
 
 
 @router.post("/channel/remove", response_model=StatusResponse)
@@ -199,12 +263,14 @@ def set_channel_phase(
         alerts = alert_store.get_channel_alerts(channel_id)
         clip_extractor.extract_clips(channel_id, source, alerts)
 
-    request.app.state.ws.enqueue({
-        "type": "phase_changed",
-        "channel": channel_id,
-        "phase": phase.value,
-        "previous_phase": previous.value,
-    })
+    request.app.state.ws.enqueue(
+        {
+            "type": "phase_changed",
+            "channel": channel_id,
+            "phase": phase.value,
+            "previous_phase": previous.value,
+        }
+    )
     return PhaseResponse(status="ok", phase=phase.value)
 
 

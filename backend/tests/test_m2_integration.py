@@ -21,7 +21,11 @@ def test_full_api_lifecycle(client, app):
 
     # WS broadcaster received pipeline_event
     msg = ws_broadcaster._queue.get_nowait()
-    assert msg == {"type": "pipeline_event", "event": "started", "detail": "Pipeline started"}
+    assert msg == {
+        "type": "pipeline_event",
+        "event": "started",
+        "detail": "Pipeline started",
+    }
 
     # -- 2. Add two channels --
     r0 = client.post("/channel/add", json={"source": "/data/lytle_south.mp4"})
@@ -59,23 +63,30 @@ def test_full_api_lifecycle(client, app):
     assert frame_msg["frame"] == 1
 
     # -- 6. Simulate alert emission → AlertStore + WS --
-    backend.emit_alert({
-        "track_id": 42,
-        "label": "car",
-        "entry_arm": "north",
-        "entry_label": "741-North",
-        "exit_arm": "south",
-        "exit_label": "741-South",
-        "method": "confirmed",
-        "was_stagnant": False,
-        "first_seen_frame": 100,
-        "last_seen_frame": 400,
-        "duration_frames": 300,
-        "trajectory": [(100, 200), (200, 300)],
-        "per_frame_data": [
-            {"frame": 100, "bbox": (10, 20, 30, 40), "centroid": (25, 40), "confidence": 0.9},
-        ],
-    })
+    backend.emit_alert(
+        {
+            "track_id": 42,
+            "label": "car",
+            "entry_arm": "north",
+            "entry_label": "741-North",
+            "exit_arm": "south",
+            "exit_label": "741-South",
+            "method": "confirmed",
+            "was_stagnant": False,
+            "first_seen_frame": 100,
+            "last_seen_frame": 400,
+            "duration_frames": 300,
+            "trajectory": [(100, 200), (200, 300)],
+            "per_frame_data": [
+                {
+                    "frame": 100,
+                    "bbox": (10, 20, 30, 40),
+                    "centroid": (25, 40),
+                    "confidence": 0.9,
+                },
+            ],
+        }
+    )
 
     # Alert stored
     alerts = alert_store.get_alerts()
@@ -98,13 +109,15 @@ def test_full_api_lifecycle(client, app):
     assert full["entry_direction"] == "north"
 
     # -- 7. Simulate track_ended → WS --
-    backend.emit_track_ended({
-        "type": "track_ended",
-        "channel": 0,
-        "track_id": 42,
-        "class": "car",
-        "state": "completed",
-    })
+    backend.emit_track_ended(
+        {
+            "type": "track_ended",
+            "channel": 0,
+            "track_id": 42,
+            "class": "car",
+            "state": "completed",
+        }
+    )
     ws_track = ws_broadcaster._queue.get_nowait()
     assert ws_track["type"] == "track_ended"
 
@@ -125,7 +138,11 @@ def test_full_api_lifecycle(client, app):
     assert resp.status_code == 200
 
     ws_stop = ws_broadcaster._queue.get_nowait()
-    assert ws_stop == {"type": "pipeline_event", "event": "stopped", "detail": "Pipeline stopped"}
+    assert ws_stop == {
+        "type": "pipeline_event",
+        "event": "stopped",
+        "detail": "Pipeline stopped",
+    }
 
     # Pipeline state reset
     assert not app.state.pipeline_started
@@ -135,6 +152,7 @@ def test_full_api_lifecycle(client, app):
 def test_site_config_round_trip(client, monkeypatch, tmp_path):
     """Save → load → list site configs through the API."""
     import backend.config.site_config as sc
+
     monkeypatch.setattr(sc, "SITES_DIR", tmp_path)
 
     config = {
@@ -184,20 +202,42 @@ def test_multi_channel_isolation(client, app):
     assert q1.get_nowait() == b"ch1"
 
     # Add alerts on different channels
-    backend.emit_alert({
-        "track_id": 1, "label": "car", "entry_arm": "n", "entry_label": "N",
-        "exit_arm": "s", "exit_label": "S", "method": "confirmed",
-        "was_stagnant": False, "first_seen_frame": 0, "last_seen_frame": 100,
-        "duration_frames": 100, "trajectory": [], "per_frame_data": [],
-        "channel": 0,
-    })
-    backend.emit_alert({
-        "track_id": 2, "label": "truck", "entry_arm": "e", "entry_label": "E",
-        "exit_arm": "w", "exit_label": "W", "method": "confirmed",
-        "was_stagnant": False, "first_seen_frame": 0, "last_seen_frame": 200,
-        "duration_frames": 200, "trajectory": [], "per_frame_data": [],
-        "channel": 1,
-    })
+    backend.emit_alert(
+        {
+            "track_id": 1,
+            "label": "car",
+            "entry_arm": "n",
+            "entry_label": "N",
+            "exit_arm": "s",
+            "exit_label": "S",
+            "method": "confirmed",
+            "was_stagnant": False,
+            "first_seen_frame": 0,
+            "last_seen_frame": 100,
+            "duration_frames": 100,
+            "trajectory": [],
+            "per_frame_data": [],
+            "channel": 0,
+        }
+    )
+    backend.emit_alert(
+        {
+            "track_id": 2,
+            "label": "truck",
+            "entry_arm": "e",
+            "entry_label": "E",
+            "exit_arm": "w",
+            "exit_label": "W",
+            "method": "confirmed",
+            "was_stagnant": False,
+            "first_seen_frame": 0,
+            "last_seen_frame": 200,
+            "duration_frames": 200,
+            "trajectory": [],
+            "per_frame_data": [],
+            "channel": 1,
+        }
+    )
 
     # Remove channel 0 — only its alerts cleared
     client.post("/channel/remove", json={"channel_id": 0})

@@ -283,6 +283,7 @@ class TestSave:
 
 # --- Helpers ---
 
+
 def _make_frame(height: int, width: int) -> np.ndarray:
     """Create a blank RGB frame."""
     return np.zeros((height, width, 3), dtype=np.uint8)

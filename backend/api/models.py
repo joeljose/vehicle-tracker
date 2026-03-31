@@ -5,6 +5,7 @@ from pydantic import BaseModel, field_validator
 
 # -- Requests --
 
+
 class AddChannelRequest(BaseModel):
     source: str
 
@@ -45,12 +46,18 @@ class SiteConfigRequest(BaseModel):
 
 # -- Responses --
 
+
 class StatusResponse(BaseModel):
     status: str
 
 
 class ChannelAddedResponse(BaseModel):
     channel_id: int
+
+
+class ResolvingResponse(BaseModel):
+    status: str  # "resolving"
+    request_id: str
 
 
 class PhaseResponse(BaseModel):

@@ -23,14 +23,21 @@ def mock_psm(monkeypatch):
     mock_pipeline.get_bus.return_value.connect = MagicMock()
     mock_pipeline.__getitem__ = MagicMock(return_value=MagicMock())
 
-    with patch("backend.pipeline.deepstream.adapter.Pipeline", return_value=mock_pipeline), \
-         patch("backend.pipeline.deepstream.adapter.Probe"), \
-         patch("backend.pipeline.deepstream.adapter.MjpegExtractor"), \
-         patch("backend.pipeline.deepstream.adapter.TrackingReporter") as mock_reporter_cls, \
-         patch("backend.pipeline.deepstream.adapter.load_labels", return_value={0: "car"}), \
-         patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"), \
-         patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter"):
-
+    with (
+        patch(
+            "backend.pipeline.deepstream.adapter.Pipeline", return_value=mock_pipeline
+        ),
+        patch("backend.pipeline.deepstream.adapter.Probe"),
+        patch("backend.pipeline.deepstream.adapter.MjpegExtractor"),
+        patch(
+            "backend.pipeline.deepstream.adapter.TrackingReporter"
+        ) as mock_reporter_cls,
+        patch(
+            "backend.pipeline.deepstream.adapter.load_labels", return_value={0: "car"}
+        ),
+        patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"),
+        patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter"),
+    ):
         # Configure mock reporter
         mock_reporter = MagicMock()
         mock_reporter.stitcher.lost_tracks = {}
@@ -39,6 +46,7 @@ def mock_psm(monkeypatch):
         mock_reporter_cls.return_value = mock_reporter
 
         from backend.pipeline.deepstream.adapter import DeepStreamPipeline
+
         yield DeepStreamPipeline
 
 
@@ -265,20 +273,23 @@ class TestAlertStoreThreadSafety:
         def writer():
             for i in range(50):
                 try:
-                    store.add_transit_alert({
-                        "track_id": i,
-                        "entry_arm": "n",
-                        "entry_label": "North",
-                        "exit_arm": "s",
-                        "exit_label": "South",
-                        "method": "crossing",
-                        "was_stagnant": False,
-                        "first_seen_frame": 0,
-                        "last_seen_frame": 100,
-                        "duration_frames": 100,
-                        "trajectory": [],
-                        "per_frame_data": [],
-                    }, channel=0)
+                    store.add_transit_alert(
+                        {
+                            "track_id": i,
+                            "entry_arm": "n",
+                            "entry_label": "North",
+                            "exit_arm": "s",
+                            "exit_label": "South",
+                            "method": "crossing",
+                            "was_stagnant": False,
+                            "first_seen_frame": 0,
+                            "last_seen_frame": 100,
+                            "duration_frames": 100,
+                            "trajectory": [],
+                            "per_frame_data": [],
+                        },
+                        channel=0,
+                    )
                 except Exception as e:
                     errors.append(e)
 
@@ -308,12 +319,14 @@ class TestTrackingReporterCallbacks:
 
     def test_callbacks_default_none(self):
         from backend.pipeline.deepstream.pipeline import TrackingReporter
+
         reporter = TrackingReporter(labels={0: "car"})
         assert reporter.alert_callback is None
         assert reporter.track_ended_callback is None
 
     def test_callbacks_stored(self):
         from backend.pipeline.deepstream.pipeline import TrackingReporter
+
         alert_cb = MagicMock()
         track_cb = MagicMock()
         reporter = TrackingReporter(
@@ -354,12 +367,15 @@ class TestTrackingReporterCallbacks:
         traj = TrajectoryBuffer()
         traj.append(50, 50, 0)
 
-        reporter._finalize_lost_track(42, {
-            "dsm": mock_dsm,
-            "trajectory": traj,
-            "label": "car",
-            "lifetime": 100,
-        })
+        reporter._finalize_lost_track(
+            42,
+            {
+                "dsm": mock_dsm,
+                "trajectory": traj,
+                "label": "car",
+                "lifetime": 100,
+            },
+        )
 
         assert len(alerts) == 1
         assert alerts[0]["track_id"] == reporter._seq_id(42)
@@ -384,12 +400,15 @@ class TestTrackingReporterCallbacks:
         traj = TrajectoryBuffer()
         traj.append(50, 50, 0)
 
-        reporter._finalize_lost_track(10, {
-            "dsm": mock_dsm,
-            "trajectory": traj,
-            "label": "car",
-            "lifetime": 50,
-        })
+        reporter._finalize_lost_track(
+            10,
+            {
+                "dsm": mock_dsm,
+                "trajectory": traj,
+                "label": "car",
+                "lifetime": 50,
+            },
+        )
 
         assert len(ended) == 1
         assert ended[0]["track_id"] == reporter._seq_id(10)

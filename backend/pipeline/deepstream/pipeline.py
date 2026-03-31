@@ -72,7 +72,9 @@ class TrackingReporter(BatchMetadataOperator):
         self.class_counts: dict[str, int] = {}
         self.start_time: float | None = None
         # Track lifecycle state
-        self.active_tracks: dict[int, dict] = {}  # track_id -> {label, first_frame, last_frame, trajectory, dsm}
+        self.active_tracks: dict[
+            int, dict
+        ] = {}  # track_id -> {label, first_frame, last_frame, trajectory, dsm}
         self.lost_tracks: list[dict] = []
         # Best-photo capture
         self.best_photo = best_photo
@@ -117,7 +119,9 @@ class TrackingReporter(BatchMetadataOperator):
 
                 for obj_meta in frame_meta.object_items:
                     frame_detections += 1
-                    label = self.labels.get(obj_meta.class_id, f"class_{obj_meta.class_id}")
+                    label = self.labels.get(
+                        obj_meta.class_id, f"class_{obj_meta.class_id}"
+                    )
                     self.class_counts[label] = self.class_counts.get(label, 0) + 1
 
                     track_id = obj_meta.object_id
@@ -138,7 +142,8 @@ class TrackingReporter(BatchMetadataOperator):
                     if track_id not in self.active_tracks:
                         # Check stitcher for a matching lost track
                         match = self.stitcher.find_match(
-                            position=(cx, cy), frame_number=self.frame_count,
+                            position=(cx, cy),
+                            frame_number=self.frame_count,
                         )
                         if match:
                             # Merge: inherit trajectory, DSM from lost track
@@ -151,7 +156,10 @@ class TrackingReporter(BatchMetadataOperator):
                             logger.info(
                                 "Track #%d merged with lost track "
                                 "#%d (dist=%dpx, gap=%.1fs)",
-                                track_id, lost_tid, match["distance"], gap_sec,
+                                track_id,
+                                lost_tid,
+                                match["distance"],
+                                gap_sec,
                             )
                         else:
                             traj = TrajectoryBuffer()
@@ -165,21 +173,28 @@ class TrackingReporter(BatchMetadataOperator):
                             "trajectory": traj,
                             "roi_active": in_roi,
                             "dsm": dsm,
-                            "per_frame_data": [{
-                                "frame": self.frame_count,
-                                "bbox": [int(rect.left), int(rect.top),
-                                         int(rect.width), int(rect.height)],
-                                "centroid": [cx, cy],
-                                "confidence": round(obj_meta.confidence, 3),
-                                "timestamp_ms": int(
-                                    self.frame_count * (1000 / 30)),
-                            }],
+                            "per_frame_data": [
+                                {
+                                    "frame": self.frame_count,
+                                    "bbox": [
+                                        int(rect.left),
+                                        int(rect.top),
+                                        int(rect.width),
+                                        int(rect.height),
+                                    ],
+                                    "centroid": [cx, cy],
+                                    "confidence": round(obj_meta.confidence, 3),
+                                    "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                                }
+                            ],
                         }
                         if not match:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
                             logger.info(
                                 "New track #%d (%s): %s",
-                                track_id, label, roi_tag,
+                                track_id,
+                                label,
+                                roi_tag,
                             )
                     else:
                         track_state = self.active_tracks[track_id]
@@ -189,21 +204,29 @@ class TrackingReporter(BatchMetadataOperator):
 
                         track_state["last_frame"] = self.frame_count
                         track_state["trajectory"].append(cx, cy, self.frame_count)
-                        track_state["per_frame_data"].append({
-                            "frame": self.frame_count,
-                            "bbox": [int(rect.left), int(rect.top),
-                                     int(rect.width), int(rect.height)],
-                            "centroid": [cx, cy],
-                            "confidence": round(obj_meta.confidence, 3),
-                            "timestamp_ms": int(self.frame_count * (1000 / 30)),
-                        })
+                        track_state["per_frame_data"].append(
+                            {
+                                "frame": self.frame_count,
+                                "bbox": [
+                                    int(rect.left),
+                                    int(rect.top),
+                                    int(rect.width),
+                                    int(rect.height),
+                                ],
+                                "centroid": [cx, cy],
+                                "confidence": round(obj_meta.confidence, 3),
+                                "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                            }
+                        )
                         # Update ROI status (track can move in/out)
                         was_in_roi = track_state["roi_active"]
                         track_state["roi_active"] = in_roi
                         if in_roi != was_in_roi:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
                             logger.debug(
-                                "Track #%d: %s", track_id, roi_tag,
+                                "Track #%d: %s",
+                                track_id,
+                                roi_tag,
                             )
 
                         # Line crossing check (only for ROI-active tracks)
@@ -219,21 +242,27 @@ class TrackingReporter(BatchMetadataOperator):
                             if dsm.check_stagnant(traj):
                                 logger.warning(
                                     "STAGNANT: Track #%d after %ds",
-                                    track_id, self.stagnant_threshold_sec,
+                                    track_id,
+                                    self.stagnant_threshold_sec,
                                 )
                                 if self.alert_callback:
-                                    self.alert_callback({
-                                        "type": "stagnant_alert",
-                                        "track_id": self._seq_id(track_id),
-                                        "label": track_state["label"],
-                                        "position": (cx, cy),
-                                        "stationary_duration_frames": (
-                                            self.frame_count - dsm.stopped_since_frame
-                                        ),
-                                        "first_seen_frame": track_state["first_frame"],
-                                        "last_seen_frame": self.frame_count,
-                                        "channel": self.channel_id,
-                                    })
+                                    self.alert_callback(
+                                        {
+                                            "type": "stagnant_alert",
+                                            "track_id": self._seq_id(track_id),
+                                            "label": track_state["label"],
+                                            "position": (cx, cy),
+                                            "stationary_duration_frames": (
+                                                self.frame_count
+                                                - dsm.stopped_since_frame
+                                            ),
+                                            "first_seen_frame": track_state[
+                                                "first_frame"
+                                            ],
+                                            "last_seen_frame": self.frame_count,
+                                            "channel": self.channel_id,
+                                        }
+                                    )
 
                     # Best-photo scoring (ROI-active tracks only)
                     if in_roi and self.best_photo:
@@ -253,8 +282,7 @@ class TrackingReporter(BatchMetadataOperator):
 
                 # Detect lost tracks (not seen this frame)
                 lost_ids = [
-                    tid for tid in list(self.active_tracks)
-                    if tid not in seen_track_ids
+                    tid for tid in list(self.active_tracks) if tid not in seen_track_ids
                 ]
                 for tid in lost_ids:
                     track = self.active_tracks.pop(tid)
@@ -272,8 +300,12 @@ class TrackingReporter(BatchMetadataOperator):
                         # Store label and frame info for finalization
                         self.stitcher.lost_tracks[tid]["label"] = track["label"]
                         self.stitcher.lost_tracks[tid]["lifetime"] = lifetime
-                        self.stitcher.lost_tracks[tid]["first_frame"] = track["first_frame"]
-                        self.stitcher.lost_tracks[tid]["per_frame_data"] = track.get("per_frame_data", [])
+                        self.stitcher.lost_tracks[tid]["first_frame"] = track[
+                            "first_frame"
+                        ]
+                        self.stitcher.lost_tracks[tid]["per_frame_data"] = track.get(
+                            "per_frame_data", []
+                        )
                     else:
                         # Non-ROI track — finalize immediately
                         if self.best_photo:
@@ -307,8 +339,11 @@ class TrackingReporter(BatchMetadataOperator):
                     avg_det = self.total_detections / self.frame_count
                     logger.debug(
                         "[Frame %d] detections=%d tracks=%d avg=%.1f/frame fps=%.1f",
-                        self.frame_count, frame_detections,
-                        len(self.active_tracks), avg_det, fps,
+                        self.frame_count,
+                        frame_detections,
+                        len(self.active_tracks),
+                        avg_det,
+                        fps,
                     )
         except Exception as e:
             logger.error("TrackingReporter: %s", e)
@@ -332,8 +367,9 @@ class TrackingReporter(BatchMetadataOperator):
 
         # Direction inference
         if self.lines:
-            alert = dsm.on_track_lost(trajectory_full, self.lines,
-                                      roi_centroid=self.roi_centroid)
+            alert = dsm.on_track_lost(
+                trajectory_full, self.lines, roi_centroid=self.roi_centroid
+            )
             if alert:
                 alert["track_id"] = seq_tid
                 alert["frame"] = self.frame_count
@@ -346,7 +382,9 @@ class TrackingReporter(BatchMetadataOperator):
                 self.transit_alerts.append(alert)
                 logger.info(
                     "TRANSIT: Track #%d: %s -> %s (%s)",
-                    seq_tid, alert["entry_label"], alert["exit_label"],
+                    seq_tid,
+                    alert["entry_label"],
+                    alert["exit_label"],
                     alert["method"],
                 )
                 if self.alert_callback:
@@ -384,22 +422,28 @@ class TrackingReporter(BatchMetadataOperator):
             crossing_type = cal.classify(direction)
             logger.info(
                 "Track #%d crossed %s line (%s)",
-                track_id, cal.line.label, crossing_type,
+                track_id,
+                cal.line.label,
+                crossing_type,
             )
-            self.crossings.append({
-                "track_id": self._seq_id(track_id),
-                "arm": arm_id,
-                "label": cal.line.label,
-                "type": crossing_type,
-                "frame": self.frame_count,
-            })
+            self.crossings.append(
+                {
+                    "track_id": self._seq_id(track_id),
+                    "arm": arm_id,
+                    "label": cal.line.label,
+                    "type": crossing_type,
+                    "frame": self.frame_count,
+                }
+            )
 
             # Feed to direction state machine
             track_state = self.active_tracks.get(track_id)
             if track_state:
                 dsm = track_state["dsm"]
                 alert = dsm.on_crossing(
-                    arm_id, cal.line.label, crossing_type,
+                    arm_id,
+                    cal.line.label,
+                    crossing_type,
                     trajectory=track_state["trajectory"].get_full(),
                     arms=self.lines,
                     roi_centroid=self.roi_centroid,
@@ -416,8 +460,10 @@ class TrackingReporter(BatchMetadataOperator):
                     self.transit_alerts.append(alert)
                     logger.info(
                         "TRANSIT: Track #%d: %s -> %s (%s)",
-                        track_id, alert["entry_label"],
-                        alert["exit_label"], alert["method"],
+                        track_id,
+                        alert["entry_label"],
+                        alert["exit_label"],
+                        alert["method"],
                     )
                     if self.alert_callback:
                         self.alert_callback(alert)
@@ -428,14 +474,16 @@ class TrackingReporter(BatchMetadataOperator):
         # Tracks still active at end count as completed too
         all_tracks = list(self.lost_tracks)
         for tid, track in self.active_tracks.items():
-            all_tracks.append({
-                "track_id": self._seq_id(tid),
-                "label": track["label"],
-                "lifetime": track["last_frame"] - track["first_frame"] + 1,
-                "trajectory": track["trajectory"].get_full(),
-                "roi_active": track["roi_active"],
-                "direction_state": track["dsm"].state.value,
-            })
+            all_tracks.append(
+                {
+                    "track_id": self._seq_id(tid),
+                    "label": track["label"],
+                    "lifetime": track["last_frame"] - track["first_frame"] + 1,
+                    "trajectory": track["trajectory"].get_full(),
+                    "roi_active": track["roi_active"],
+                    "direction_state": track["dsm"].state.value,
+                }
+            )
         return {
             "frames": self.frame_count,
             "total_detections": self.total_detections,
@@ -537,13 +585,17 @@ def build_pipeline(
     reporter.infer_node = pipeline[infer_element_name]
 
     # infer → nvtracker (NvDCF)
-    pipeline.add("nvtracker", "tracker", {
-        "tracker-width": 640,
-        "tracker-height": 384,
-        "gpu-id": 0,
-        "ll-lib-file": TRACKER_LIB,
-        "ll-config-file": TRACKER_CONFIG,
-    })
+    pipeline.add(
+        "nvtracker",
+        "tracker",
+        {
+            "tracker-width": 640,
+            "tracker-height": 384,
+            "gpu-id": 0,
+            "ll-lib-file": TRACKER_LIB,
+            "ll-config-file": TRACKER_CONFIG,
+        },
+    )
     pipeline.link(infer_element_name, "tracker")
 
     # Attach metadata probe on tracker (scores detections before buffer flows downstream)
@@ -557,9 +609,13 @@ def build_pipeline(
         # Branch 1: RGB for best-photo
         pipeline.add("queue", "snap_queue", {})
         pipeline.add("nvvideoconvert", "snap_conv", {})
-        pipeline.add("capsfilter", "snap_caps", {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
+        pipeline.add(
+            "capsfilter",
+            "snap_caps",
+            {
+                "caps": "video/x-raw(memory:NVMM),format=RGB",
+            },
+        )
         pipeline.add("fakesink", "snap_sink", {"sync": False})
         pipeline.link("split", "snap_queue", "snap_conv", "snap_caps", "snap_sink")
         pipeline.attach("snap_caps", Probe("extractor", extractor))
@@ -573,9 +629,13 @@ def build_pipeline(
     else:
         # No output: linear — tracker → RGB conversion → [buffer probe] → fakesink
         pipeline.add("nvvideoconvert", "snap_conv", {})
-        pipeline.add("capsfilter", "snap_caps", {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
+        pipeline.add(
+            "capsfilter",
+            "snap_caps",
+            {
+                "caps": "video/x-raw(memory:NVMM),format=RGB",
+            },
+        )
         pipeline.add("fakesink", "snap_sink", {"sync": False})
         pipeline.link("tracker", "snap_conv", "snap_caps", "snap_sink")
         pipeline.attach("snap_caps", Probe("extractor", extractor))
@@ -605,8 +665,11 @@ def run_pipeline(
         Detection and tracking summary dict.
     """
     pipeline, flow, reporter = build_pipeline(
-        video_path, output_path, interval,
-        roi_polygon=roi_polygon, lines=lines,
+        video_path,
+        output_path,
+        interval,
+        roi_polygon=roi_polygon,
+        lines=lines,
         snapshot_dir=snapshot_dir,
     )
 
@@ -631,7 +694,10 @@ def run_pipeline(
     logger.info(
         "Pipeline complete: %d frames, %d detections, %d unique tracks, "
         "%d merges, %.1f fps",
-        summary["frames"], summary["total_detections"],
-        summary["unique_tracks"], summary["merges"], summary["fps"],
+        summary["frames"],
+        summary["total_detections"],
+        summary["unique_tracks"],
+        summary["merges"],
+        summary["fps"],
     )
     return summary

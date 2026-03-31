@@ -51,7 +51,8 @@ class FakeBackend:
         del self.channel_phases[channel_id]
 
     def configure_channel(
-        self, channel_id: int,
+        self,
+        channel_id: int,
         roi_polygon: list[tuple[float, float]],
         entry_exit_lines: dict,
     ) -> None:
@@ -75,19 +76,13 @@ class FakeBackend:
     def set_inference_interval(self, interval: int) -> None:
         self.inference_interval = interval
 
-    def register_frame_callback(
-        self, callback: Callable[[FrameResult], None]
-    ) -> None:
+    def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         self._frame_callback = callback
 
-    def register_alert_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_alert_callback(self, callback: Callable[[dict], None]) -> None:
         self._alert_callback = callback
 
-    def register_track_ended_callback(
-        self, callback: Callable[[dict], None]
-    ) -> None:
+    def register_track_ended_callback(self, callback: Callable[[dict], None]) -> None:
         self._track_ended_callback = callback
 
     def register_phase_callback(self, callback) -> None:

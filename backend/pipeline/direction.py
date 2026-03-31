@@ -14,9 +14,7 @@ class LineSeg:
     end: tuple[float, float]
 
 
-def cross_product_sign(
-    line: LineSeg, point: tuple[float, float]
-) -> float:
+def cross_product_sign(line: LineSeg, point: tuple[float, float]) -> float:
     """2D cross product of (B-A) x (P-A). Sign indicates which side of the line."""
     ax, ay = line.start
     bx, by = line.end
@@ -127,9 +125,12 @@ class TrackState(Enum):
 
 
 def _point_to_segment_distance(
-    px: float, py: float,
-    ax: float, ay: float,
-    bx: float, by: float,
+    px: float,
+    py: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
 ) -> float:
     """Minimum distance from point (px, py) to line segment (ax,ay)-(bx,by)."""
     dx, dy = bx - ax, by - ay
@@ -179,9 +180,12 @@ def nearest_arm(
     best_dist = float("inf")
     for arm_id, line in arms.items():
         dist = _point_to_segment_distance(
-            avg_x, avg_y,
-            line.start[0], line.start[1],
-            line.end[0], line.end[1],
+            avg_x,
+            avg_y,
+            line.start[0],
+            line.start[1],
+            line.end[0],
+            line.end[1],
         )
         if dist < best_dist:
             best_dist = dist
@@ -241,7 +245,9 @@ class DirectionStateMachine:
             A transit alert dict if this crossing completes a transit, else None.
         """
         if crossing_type == "entry" and self.state in (
-            TrackState.UNKNOWN, TrackState.WAITING, TrackState.STAGNANT,
+            TrackState.UNKNOWN,
+            TrackState.WAITING,
+            TrackState.STAGNANT,
         ):
             self.entry_arm = arm_id
             self.entry_label = label
@@ -270,7 +276,9 @@ class DirectionStateMachine:
             self.exit_label = label
             if trajectory and arms:
                 inferred_entry = nearest_arm(
-                    trajectory, arms, use_start=True,
+                    trajectory,
+                    arms,
+                    use_start=True,
                     roi_centroid=roi_centroid,
                 )
                 if inferred_entry and inferred_entry != arm_id:
@@ -300,10 +308,12 @@ class DirectionStateMachine:
         """
         if self.state == TrackState.UNKNOWN:
             # Never crossed any line — try to infer both entry and exit
-            entry = nearest_arm(trajectory, arms, use_start=True,
-                                roi_centroid=roi_centroid)
-            exit_ = nearest_arm(trajectory, arms, use_start=False,
-                                roi_centroid=roi_centroid)
+            entry = nearest_arm(
+                trajectory, arms, use_start=True, roi_centroid=roi_centroid
+            )
+            exit_ = nearest_arm(
+                trajectory, arms, use_start=False, roi_centroid=roi_centroid
+            )
             if entry and exit_ and entry != exit_:
                 return {
                     "entry_arm": entry,
@@ -314,10 +324,15 @@ class DirectionStateMachine:
                     "was_stagnant": self.was_stagnant,
                 }
 
-        elif self.state in (TrackState.IN_TRANSIT, TrackState.WAITING, TrackState.STAGNANT):
+        elif self.state in (
+            TrackState.IN_TRANSIT,
+            TrackState.WAITING,
+            TrackState.STAGNANT,
+        ):
             # Had entry but no exit — infer exit
-            exit_ = nearest_arm(trajectory, arms, use_start=False,
-                                roi_centroid=roi_centroid)
+            exit_ = nearest_arm(
+                trajectory, arms, use_start=False, roi_centroid=roi_centroid
+            )
             if exit_ and exit_ != self.entry_arm:
                 return {
                     "entry_arm": self.entry_arm,
@@ -357,7 +372,10 @@ class DirectionStateMachine:
                     self.state = TrackState.WAITING
 
             stopped_frames = current_frame - self.stopped_since_frame
-            if stopped_frames >= self.stagnant_window_frames and self.state != TrackState.STAGNANT:
+            if (
+                stopped_frames >= self.stagnant_window_frames
+                and self.state != TrackState.STAGNANT
+            ):
                 self.state = TrackState.STAGNANT
                 self.was_stagnant = True
                 return True

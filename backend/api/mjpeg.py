@@ -71,11 +71,15 @@ class MjpegBroadcaster:
                 except queue.Empty:
                     continue
                 yield (
-                    f"--{BOUNDARY}\r\n"
-                    f"Content-Type: image/jpeg\r\n"
-                    f"Content-Length: {len(jpeg)}\r\n"
-                    f"\r\n"
-                ).encode() + jpeg + b"\r\n"
+                    (
+                        f"--{BOUNDARY}\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg)}\r\n"
+                        f"\r\n"
+                    ).encode()
+                    + jpeg
+                    + b"\r\n"
+                )
         except asyncio.CancelledError:
             return
         finally:

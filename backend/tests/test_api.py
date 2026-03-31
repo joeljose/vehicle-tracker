@@ -54,11 +54,22 @@ class TestChannelManagement:
         assert resp.status_code == 400
         assert "not found" in resp.json()["detail"].lower()
 
-    def test_add_channel_url_skips_validation(self, client):
+    def test_add_channel_youtube_url_returns_202(self, client):
+        """YouTube URLs trigger async resolution and return 202."""
         client.post("/pipeline/start")
         resp = client.post(
             "/channel/add",
             json={"source": "https://youtube.com/watch?v=abc"},
+        )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "resolving"
+
+    def test_add_channel_non_youtube_url_skips_validation(self, client):
+        """Non-YouTube URLs (e.g. RTSP) skip file validation."""
+        client.post("/pipeline/start")
+        resp = client.post(
+            "/channel/add",
+            json={"source": "rtsp://camera.local/stream"},
         )
         assert resp.status_code == 200
 
@@ -190,6 +201,7 @@ class TestMjpegBroadcaster:
 
     def test_on_frame_delivers_to_subscriber(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q = broadcaster.subscribe(0)
         result = FrameResult(
@@ -204,6 +216,7 @@ class TestMjpegBroadcaster:
 
     def test_on_frame_skips_none_jpeg(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q = broadcaster.subscribe(0)
         result = FrameResult(
@@ -218,6 +231,7 @@ class TestMjpegBroadcaster:
 
     def test_on_frame_fan_out_to_multiple_subscribers(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q1 = broadcaster.subscribe(0)
         q2 = broadcaster.subscribe(0)
@@ -234,6 +248,7 @@ class TestMjpegBroadcaster:
 
     def test_on_frame_drops_oldest_when_full(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q = broadcaster.subscribe(0)  # maxsize=2
         for i in range(3):
@@ -252,6 +267,7 @@ class TestMjpegBroadcaster:
 
     def test_unsubscribe_removes_queue(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q = broadcaster.subscribe(0)
         broadcaster.unsubscribe(0, q)
@@ -267,6 +283,7 @@ class TestMjpegBroadcaster:
 
     def test_channels_are_independent(self, app):
         from backend.pipeline.protocol import FrameResult
+
         broadcaster = app.state.mjpeg
         q0 = broadcaster.subscribe(0)
         q1 = broadcaster.subscribe(1)
@@ -297,6 +314,7 @@ class TestWsBroadcaster:
 
     def test_on_frame_builds_message(self, app):
         from backend.pipeline.protocol import Detection, FrameResult
+
         ws_broadcaster = app.state.ws
         result = FrameResult(
             channel_id=0,
@@ -391,8 +409,8 @@ class TestWsBroadcaster:
         ws_ch0.send_text = AsyncMock()
 
         broadcaster._clients = [
-            (ws_all, None, None),       # no filter — receives all
-            (ws_ch0, {0}, None),        # only channel 0
+            (ws_all, None, None),  # no filter — receives all
+            (ws_ch0, {0}, None),  # only channel 0
         ]
 
         # Broadcast a channel 1 message
