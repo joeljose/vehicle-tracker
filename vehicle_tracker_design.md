@@ -604,28 +604,30 @@ def classify_crossing(line: LineSeg, crossing_direction: int) -> str:
 
 ### 6.4 Direction Inference
 
-When a track ends without crossing both lines (common for vehicles that appear after the entry line or disappear before the exit line), direction is inferred by **proximity** — which line segment is closest to the trajectory's start (entry) or end (exit).
+When a track ends without crossing both lines (common for vehicles that appear after the entry line or disappear before the exit line), direction is inferred by **ray intersection** — a ray is cast from the trajectory endpoint along the heading direction, and the first arm line it intersects determines the arm.
 
-This approach is more robust than heading-based inference because vehicles often cross lines at oblique angles rather than perpendicular, especially at angled junctions.
+For entry inference: the ray is cast backwards (opposite to direction of travel) from the first few centroids. For exit inference: the ray is cast forwards from the last few centroids.
+
+**Sanitization:** The trajectory is first trimmed for sudden position jumps (>80px between consecutive frames), which indicate tracker ID reassignment during occlusion. For exit inference, the tail heading is cross-checked against the stable mid-trajectory heading (25%-75%) — if they diverge by more than 60°, the stable heading is used instead (gradual tracker drift during occlusion).
+
+**Fallback:** If the heading is too weak (<5px displacement) or the ray doesn't intersect any line, falls back to pure proximity (closest line segment to the anchor point).
 
 ```python
-def nearest_arm(trajectory, arms, use_start, roi_centroid=None):
-    """
-    Average the first or last 5 centroids to reduce noise.
-    Compute point-to-line-segment distance for each arm.
-    Return the arm whose line is closest to the averaged point.
-    """
-    n = min(5, len(trajectory) // 2)
-    segment = trajectory[:n] if use_start else trajectory[-n:]
-    avg_x = sum(p[0] for p in segment) / len(segment)
-    avg_y = sum(p[1] for p in segment) / len(segment)
-
-    best_arm, best_dist = None, float('inf')
+def nearest_arm(trajectory, arms, use_start):
+    # 1. Trim trajectory jumps (hard ID switches)
+    # 2. Compute heading from first/last N centroids
+    # 3. For exit: cross-check tail heading against stable heading
+    # 4. Cast ray from anchor along heading direction
     for arm_id, line in arms.items():
-        dist = point_to_segment_distance(avg_x, avg_y, line.start, line.end)
-        if dist < best_dist:
-            best_dist, best_arm = dist, arm_id
-    return best_arm
+        t = ray_segment_intersection(
+            anchor, ray_direction, line.start, line.end
+        )
+        # Pick the line with smallest t (first intersection)
+
+    # 5. Fallback: pure proximity if ray misses all lines
+    for arm_id, line in arms.items():
+        dist = point_to_segment_distance(anchor, line)
+        # Pick closest
 ```
 
 ### 6.5 Track ID Mapping

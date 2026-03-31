@@ -181,25 +181,47 @@ def _angle_between(h1: tuple[float, float], h2: tuple[float, float]) -> float:
 _HEADING_DIVERGENCE_THRESHOLD = 60.0
 
 
+def _ray_segment_intersection(
+    ox: float, oy: float, dx: float, dy: float,
+    ax: float, ay: float, bx: float, by: float,
+) -> float | None:
+    """Find where a ray intersects a line segment.
+
+    Ray: origin (ox, oy) + t * direction (dx, dy), t >= 0.
+    Segment: from (ax, ay) to (bx, by).
+
+    Returns t (distance along ray) if intersection exists, else None.
+    """
+    sx, sy = bx - ax, by - ay
+    denom = dx * sy - dy * sx
+    if abs(denom) < 1e-12:
+        return None  # parallel
+    t = ((ax - ox) * sy - (ay - oy) * sx) / denom
+    u = ((ax - ox) * dy - (ay - oy) * dx) / denom
+    if t >= 0 and 0 <= u <= 1:
+        return t
+    return None
+
+
 def nearest_arm(
     trajectory: list[tuple[int, int, int]],
     arms: dict[str, LineSeg],
     use_start: bool,
     roi_centroid: tuple[float, float] | None = None,
 ) -> str | None:
-    """Infer entry/exit arm by heading-projected proximity.
+    """Infer entry/exit arm via ray intersection, with proximity fallback.
 
-    Projects the trajectory backwards (entry) or forwards (exit) along
-    its heading to find which line the vehicle was approaching from or
-    heading toward.
+    Casts a ray from the trajectory endpoint along the heading direction
+    (backwards for entry, forwards for exit) and finds which arm line the
+    ray intersects first. This is geometrically exact — no arbitrary
+    projection distance.
 
-    To guard against tracker ID drift during occlusion (where the tail
-    or head of the trajectory gets contaminated by a different vehicle),
-    the endpoint heading is cross-checked against the stable mid-trajectory
-    heading. If they diverge by more than 60°, the stable heading is used.
+    If heading is too weak or the ray misses all lines, falls back to
+    pure proximity (closest line to the anchor point).
 
-    Falls back to pure proximity if the heading is too short to be
-    reliable (< 5 pixels displacement).
+    To guard against tracker ID drift during occlusion, the endpoint
+    heading is cross-checked against the stable mid-trajectory heading.
+    If they diverge by more than 60 degrees, the stable heading is used.
 
     Args:
         trajectory: List of (x, y, frame) entries.
@@ -213,15 +235,14 @@ def nearest_arm(
     if len(trajectory) < 4:
         return None
 
-    # Layer 1: trim sudden position jumps (hard ID switches)
+    # Trim sudden position jumps (hard tracker ID switches)
     trajectory = _trim_trajectory_jumps(trajectory)
 
     n = min(5, len(trajectory) // 2)
     if n < 1:
         return None
 
-    # Compute stable mid-trajectory heading (25%-75% of trajectory)
-    # This is unlikely to be contaminated by tracker drift at either end.
+    # Stable mid-trajectory heading (25%-75%), unlikely to be contaminated
     q1 = len(trajectory) // 4
     q3 = 3 * len(trajectory) // 4
     stable_seg = trajectory[q1 : q3 + 1] if q3 > q1 else trajectory
@@ -232,51 +253,52 @@ def nearest_arm(
         anchor_x = sum(p[0] for p in seg) / len(seg)
         anchor_y = sum(p[1] for p in seg) / len(seg)
         endpoint_h = _heading(seg)
-
-        # Cross-check: if start heading diverges from stable, use stable
-        if _angle_between(endpoint_h, stable_h) > _HEADING_DIVERGENCE_THRESHOLD:
-            hx, hy = stable_h
-        else:
-            hx, hy = endpoint_h
-
-        proj_x = anchor_x - hx * 3.0
-        proj_y = anchor_y - hy * 3.0
+        # Ray direction: backwards (opposite to travel)
+        ray_dx, ray_dy = -endpoint_h[0], -endpoint_h[1]
     else:
         seg = trajectory[-n:]
         anchor_x = sum(p[0] for p in seg) / len(seg)
         anchor_y = sum(p[1] for p in seg) / len(seg)
         endpoint_h = _heading(seg)
 
-        # Cross-check: if tail heading diverges from stable, use stable
-        # and also fall back to the anchor from the stable region end
+        # For exit: if tail heading is contaminated (diverges from stable),
+        # use stable heading and anchor from clean region
         if _angle_between(endpoint_h, stable_h) > _HEADING_DIVERGENCE_THRESHOLD:
-            hx, hy = stable_h
-            # Use the end of the stable region as anchor instead of
-            # the contaminated tail
+            endpoint_h = stable_h
             clean_seg = trajectory[q3 - n : q3]
             if len(clean_seg) >= 2:
                 anchor_x = sum(p[0] for p in clean_seg) / len(clean_seg)
                 anchor_y = sum(p[1] for p in clean_seg) / len(clean_seg)
-        else:
-            hx, hy = endpoint_h
 
-        proj_x = anchor_x + hx * 3.0
-        proj_y = anchor_y + hy * 3.0
+        # Ray direction: forwards (along travel)
+        ray_dx, ray_dy = endpoint_h[0], endpoint_h[1]
 
-    heading_len = math.sqrt(hx * hx + hy * hy)
-    query_x = proj_x if heading_len > 5.0 else anchor_x
-    query_y = proj_y if heading_len > 5.0 else anchor_y
+    heading_len = math.sqrt(ray_dx * ray_dx + ray_dy * ray_dy)
 
+    # Try ray intersection first (if heading is meaningful)
+    if heading_len > 5.0:
+        best_arm = None
+        best_t = float("inf")
+        for arm_id, line in arms.items():
+            t = _ray_segment_intersection(
+                anchor_x, anchor_y, ray_dx, ray_dy,
+                line.start[0], line.start[1],
+                line.end[0], line.end[1],
+            )
+            if t is not None and t < best_t:
+                best_t = t
+                best_arm = arm_id
+        if best_arm is not None:
+            return best_arm
+
+    # Fallback: pure proximity (closest line to anchor)
     best_arm = None
     best_dist = float("inf")
     for arm_id, line in arms.items():
         dist = _point_to_segment_distance(
-            query_x,
-            query_y,
-            line.start[0],
-            line.start[1],
-            line.end[0],
-            line.end[1],
+            anchor_x, anchor_y,
+            line.start[0], line.start[1],
+            line.end[0], line.end[1],
         )
         if dist < best_dist:
             best_dist = dist

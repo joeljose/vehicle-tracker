@@ -75,7 +75,7 @@ make down             # Stop everything
 ### Testing & Quality
 
 ```bash
-make test             # Run all tests (356 tests, no GPU needed)
+make test             # Run all tests (363 tests, no GPU needed)
 make test-v           # Verbose (show test names)
 make lint             # Ruff check
 make format           # Ruff auto-fix
@@ -138,7 +138,7 @@ vehicle-tracker/
       snapshot.py        # Best-photo capture
       clip_extractor.py  # ffmpeg clip extraction for replay
       fake.py            # Test backend (no GPU needed)
-    tests/               # 356 tests
+    tests/               # 363 tests
     main.py              # FastAPI app factory
     Dockerfile
   frontend/

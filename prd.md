@@ -177,8 +177,8 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-26a | Line polarity (which side is junction interior) is specified by the operator via a junction-side indicator shown after drawing each line. The indicator can be flipped with one click. Polarity is stored in the site config as `junction_side: "left" \| "right"` per line. No auto-calibration delay — alerts start immediately. | Must |
 | F-27 | Per-track direction state machine: UNKNOWN -> ENTERED(arm) -> EXITED(arm) -> ALERT | Must |
 | F-28 | Confirmed transit: vehicle crossed both an entry line and an exit line -- entry and exit arms are known precisely | Must |
-| F-29 | Inferred transit: when a track is lost before crossing an exit line (or appears after an entry line), proximity to entry/exit line segments is used to infer the missing direction — the closest line to the trajectory start (entry) or end (exit) is selected | Should |
-| F-30 | `nearest_arm()` averages the first/last 5 centroids for noise reduction, then computes point-to-line-segment distance for each arm | Should |
+| F-29 | Inferred transit: when a track is lost before crossing an exit line (or appears after an entry line), the missing direction is inferred by casting a ray from the trajectory endpoint along its heading and finding which arm line the ray intersects first. Falls back to pure proximity (closest line) if the ray misses all lines or heading is too weak. | Should |
+| F-30 | `nearest_arm()` uses ray-segment intersection for direction inference. Trajectory is sanitized for sudden position jumps (tracker ID switches). Exit heading is cross-checked against stable mid-trajectory heading to detect occlusion drift. | Should |
 | F-30a | DeepStream track IDs (64-bit) are mapped to sequential IDs starting from 1 per channel to avoid JavaScript `Number.MAX_SAFE_INTEGER` overflow. Alert `track_id` fields are serialized as strings in JSON | Must |
 
 ### 8.5 Vehicle States
