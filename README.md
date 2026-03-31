@@ -7,6 +7,7 @@ A GPU-accelerated vehicle tracking system for traffic junction monitoring. Detec
 - **Directional transit detection** — tracks vehicles through a junction and reports entry/exit directions (e.g., "west to north")
 - **Stagnant vehicle alerts** — detects vehicles stopped for configurable duration (default 2.5 min)
 - **Best-photo capture** — automatically saves the highest quality frame of each tracked vehicle
+- **Multi-channel** — up to 8 channels sharing a single GPU pipeline with independent phase transitions (~280 MB VRAM saved per channel vs separate pipelines)
 - **4-phase workflow** — Setup (draw ROI/lines) -> Analytics (run detection) -> Review (replay alerts) -> Teardown
 - **Browser-based UI** — React frontend with live MJPEG video, ROI/line drawing tools, alert feed, and video replay
 - **Real-time streaming** — MJPEG video with detection overlays at ~15fps, WebSocket alerts, stats bar
@@ -21,11 +22,14 @@ Browser (React) <-> FastAPI (REST + WebSocket + MJPEG) <-> DeepStream Pipeline (
 
 The FastAPI layer communicates with the pipeline through a `PipelineBackend` Protocol interface, keeping the API layer pipeline-agnostic.
 
-**Pipeline topology per channel:**
+**Shared pipeline topology (M5):**
 ```
-decode -> nvinfer (TrafficCamNet) -> nvtracker (NvDCF) -> tee
-                                                           |-> OSD -> MJPEG extraction (~15fps)
-                                                           |-> RGB -> best-photo extraction
+src_0 (nvurisrcbin) ─┐
+src_1 (nvurisrcbin) ─┤
+  ...                ├─> nvstreammux -> nvinfer (TrafficCamNet) -> nvtracker (NvDCF) -> nvstreamdemux
+                     │                                                                    ├─> ch0: OSD -> MJPEG (~15fps)
+                     │                                                                    ├─> ch1: OSD -> MJPEG (~15fps)
+                     │   BatchMetadataRouter probe routes per-source metadata              ...
 ```
 
 ## Milestones
@@ -36,7 +40,7 @@ decode -> nvinfer (TrafficCamNet) -> nvtracker (NvDCF) -> tee
 | M2 — API layer (FastAPI REST/WS/MJPEG) | Complete | v0.2.0 | 237 |
 | M3 — React UI (4-phase workflow, drawing tools) | Complete | v0.3.0 | 286 |
 | M4 — DeepStream-FastAPI integration | Complete | v0.4.0 | 312 |
-| M5 — Multi-channel | Planned | — | — |
+| M5 — Multi-channel shared pipeline | Complete | v0.5.0 | 336 |
 | M6 — YouTube Live streams | Planned | — | — |
 
 ## Prerequisites
@@ -87,7 +91,7 @@ make logs           # Tail backend server logs
 ```bash
 make shell          # Bash into backend container
 make shell-frontend # Shell into frontend container
-make test           # Run pytest (312 tests)
+make test           # Run pytest (336 tests)
 make test-v         # Run pytest verbose
 make lint           # Run ruff check
 make format         # Run ruff format (auto-fix)
@@ -134,7 +138,7 @@ vehicle-tracker/
       stitch.py          # Track stitching across ID switches
       clip_extractor.py  # ffmpeg clip extraction for replay
       fake.py            # Test backend (no GPU)
-    tests/               # 312 tests
+    tests/               # 336 tests
     main.py              # FastAPI app factory
     Dockerfile           # Dev image (DeepStream + ffmpeg + pip deps)
     requirements.txt

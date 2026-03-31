@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-03-31
+
+### Added
+- Multi-channel shared pipeline: nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG
+- BatchMetadataRouter for per-source metadata dispatch to channel-specific TrackingReporters
+- Dynamic channel add/remove via pipeline rebuild (nvurisrcbin limitation workaround)
+- Per-source EOS detection via frame-gap watchdog in BatchMetadataRouter
+- Independent phase transitions per channel (Setup/Analytics/Review)
+- Per-channel snapshot directories (snapshots/{channel_id}/) with cleanup on channel removal
+- Stop Analytics button for manual analytics→review transition
+- BroadcastChannel cross-tab notification on channel removal
+- Snapshot extraction skipped during setup phase (no wasted crops from looping preview)
+- 2-channel E2E validated on RTX 4050 (~459 MB shared VRAM vs ~738 MB separate)
+
+### Fixed
+- phase_callback now fires on all transitions (was only firing on EOS auto-transition)
+- Video scroll during analytics: fixed viewport overflow with h-screen layout
+- Snapshot thumbnails and replay clips load correctly in review phase
+
+### Removed
+- Legacy per-channel pipeline builders (_start_preview_pipeline, _start_analytics_pipeline, _stop_channel_pipeline)
+
 ## [0.4.0] - 2026-03-30
 
 ### Added

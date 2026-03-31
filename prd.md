@@ -1,8 +1,8 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.4
-**Status:** M4 Complete (v0.4.0)
+**Version:** 0.5
+**Status:** M5 Complete (v0.5.0)
 **Last updated:** March 2026
 
 ---
