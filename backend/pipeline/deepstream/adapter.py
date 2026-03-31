@@ -185,6 +185,7 @@ class DeepStreamPipeline:
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")
         self._finalize_channel_state(channel_id)
+        self._cleanup_channel_snapshots(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
         self._rebuild_shared_pipeline()
@@ -281,10 +282,13 @@ class DeepStreamPipeline:
                     _, buf = cv2.imencode(".jpg", bgr)
                     return buf.tobytes()
 
-        # Fall back to disk (finalized tracks)
-        snapshot_path = Path("snapshots") / f"{track_id}.jpg"
-        if snapshot_path.exists():
-            return snapshot_path.read_bytes()
+        # Fall back to disk (finalized tracks) — check per-channel dirs
+        snapshots_root = Path("snapshots")
+        for channel_dir in snapshots_root.iterdir() if snapshots_root.exists() else []:
+            if channel_dir.is_dir():
+                snapshot_path = channel_dir / f"{track_id}.jpg"
+                if snapshot_path.exists():
+                    return snapshot_path.read_bytes()
 
         return None
 
@@ -437,9 +441,10 @@ class DeepStreamPipeline:
         self._source_index += 1
         state._source_idx = src_idx
 
-        # Per-channel reporter
-        best_photo = BestPhotoTracker()
+        # Per-channel reporter — only track best photos during analytics
+        best_photo = BestPhotoTracker() if roi_polygon is not None else None
         state.best_photo = best_photo
+        snapshot_dir = os.path.join("snapshots", str(channel_id))
         reporter = TrackingReporter(
             self._labels,
             roi_polygon=roi_polygon,
@@ -448,6 +453,7 @@ class DeepStreamPipeline:
             channel_id=channel_id,
             alert_callback=alert_callback,
             track_ended_callback=track_ended_callback,
+            snapshot_dir=snapshot_dir,
         )
         state.reporter = reporter
         self._batch_router.add_reporter(src_idx, reporter)
@@ -531,6 +537,15 @@ class DeepStreamPipeline:
         if state.mjpeg_extractor:
             state.mjpeg_extractor._callback = None
             state.mjpeg_extractor = None
+
+    def _cleanup_channel_snapshots(self, channel_id: int) -> None:
+        """Remove snapshot directory for a channel."""
+        import shutil
+        from pathlib import Path
+        snapshot_dir = Path("snapshots") / str(channel_id)
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
+            logger.info("Cleaned up snapshots for channel %d", channel_id)
 
     def _soft_remove_source(self, channel_id: int) -> None:
         """Soft-remove a channel's source from the shared pipeline.
