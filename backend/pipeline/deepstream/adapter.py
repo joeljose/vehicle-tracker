@@ -425,14 +425,17 @@ class DeepStreamPipeline:
         set changes. Old pipeline is stopped in a background thread.
         """
         # Tear down old pipeline — set sources to non-loop so they drain,
-        # then defer stop in background thread after EOS.
-        # Direct stop() causes C++ terminate when asyncio loop is running.
+        # then defer wait()+stop() in a background thread.
+        # Direct stop() from the asyncio thread causes C++ terminate.
+        # For HLS streams, file-loop=False has no effect and wait() blocks
+        # forever — the daemon thread will be killed on process exit.
+        # Callbacks are already nullified by _finalize_channel_state() so
+        # the lingering pipeline cannot generate new alerts or frames.
         if self._shared_pipeline is not None:
             old_pipeline = self._shared_pipeline
             self._shared_pipeline = None
             self._batch_router = None
 
-            # Drain all sources on old pipeline
             for state in self._states.values():
                 if state._src_name:
                     try:
@@ -641,7 +644,13 @@ class DeepStreamPipeline:
         logger.info("Shared pipeline destroyed")
 
     def _finalize_channel_state(self, channel_id: int) -> None:
-        """Finalize reporter state: save tracks, photos, disable MJPEG."""
+        """Finalize reporter state: save tracks, photos, disable all callbacks.
+
+        Critically, this nullifies the alert and track_ended callbacks on the
+        reporter. Without this, the old pipeline (still draining in a background
+        thread for YouTube HLS streams) would continue generating alerts after
+        the channel has transitioned to REVIEW.
+        """
         state = self._states.get(channel_id)
         if state is None:
             return
@@ -655,6 +664,11 @@ class DeepStreamPipeline:
                 for tid in list(state.reporter.active_tracks):
                     seq_tid = state.reporter._seq_id(tid)
                     state.best_photo.save(seq_tid, state.reporter.snapshot_dir)
+
+            # Disable callbacks so the old pipeline (still draining in
+            # background for HLS streams) can't generate new alerts
+            state.reporter.alert_callback = None
+            state.reporter.track_ended_callback = None
 
         if state.mjpeg_extractor:
             state.mjpeg_extractor._callback = None
@@ -720,6 +734,7 @@ class DeepStreamPipeline:
                     label=line_data["label"],
                     start=tuple(line_data["start"]),
                     end=tuple(line_data["end"]),
+                    junction_side=line_data.get("junction_side", "left"),
                 )
 
         def on_alert(alert):

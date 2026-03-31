@@ -7,6 +7,7 @@ software fallback otherwise). Stagnant alerts get a single-frame JPEG with bbox 
 import logging
 import shutil
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class ClipExtractor:
 
     def __init__(self, fps: float = 30.0):
         self._fps = fps
+        self._lock = threading.Lock()
         self._status: dict[str, str] = {}  # alert_id -> status
         self._clip_paths: dict[str, Path] = {}  # alert_id -> file path
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clip")
@@ -50,7 +52,8 @@ class ClipExtractor:
             alert_type = alert["type"]
 
             if alert_type == "transit_alert":
-                self._status[alert_id] = "pending"
+                with self._lock:
+                    self._status[alert_id] = "pending"
                 self._pool.submit(
                     self._extract_transit_clip,
                     alert_id,
@@ -59,7 +62,8 @@ class ClipExtractor:
                     clip_dir,
                 )
             elif alert_type == "stagnant_alert":
-                self._status[alert_id] = "pending"
+                with self._lock:
+                    self._status[alert_id] = "pending"
                 self._pool.submit(
                     self._extract_stagnant_frame,
                     alert_id,
@@ -67,6 +71,33 @@ class ClipExtractor:
                     alert,
                     clip_dir,
                 )
+
+    def extract_single(self, channel_id: int, source: str, alert: dict) -> None:
+        """Extract clip for a single alert (for late arrivals during phase transition).
+
+        Args:
+            channel_id: Channel ID (used for temp directory).
+            source: Video source file path.
+            alert: Full alert dict from AlertStore.
+        """
+        clip_dir = CLIPS_DIR / str(channel_id)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+
+        alert_id = alert["alert_id"]
+        alert_type = alert["type"]
+
+        if alert_type == "transit_alert":
+            with self._lock:
+                self._status[alert_id] = "pending"
+            self._pool.submit(
+                self._extract_transit_clip, alert_id, source, alert, clip_dir
+            )
+        elif alert_type == "stagnant_alert":
+            with self._lock:
+                self._status[alert_id] = "pending"
+            self._pool.submit(
+                self._extract_stagnant_frame, alert_id, source, alert, clip_dir
+            )
 
     def _extract_transit_clip(
         self,
@@ -104,10 +135,20 @@ class ClipExtractor:
             ]
             try:
                 subprocess.run(cmd, check=True, timeout=30)
-                self._clip_paths[alert_id] = output
-                self._status[alert_id] = "ready"
-                logger.info("Clip ready: %s (%s)", alert_id, codec)
-                return
+                # Reject corrupt files (e.g. 261-byte ftyp-only MP4)
+                if output.exists() and output.stat().st_size > 1024:
+                    with self._lock:
+                        self._clip_paths[alert_id] = output
+                        self._status[alert_id] = "ready"
+                    logger.info("Clip ready: %s (%s)", alert_id, codec)
+                    return
+                else:
+                    logger.warning(
+                        "Clip too small for %s (%d bytes), trying next codec",
+                        alert_id,
+                        output.stat().st_size if output.exists() else 0,
+                    )
+                    continue
             except (subprocess.CalledProcessError, FileNotFoundError):
                 if codec == "h264_nvenc":
                     logger.debug("NVENC unavailable, falling back to libx264")
@@ -116,7 +157,8 @@ class ClipExtractor:
             except subprocess.TimeoutExpired:
                 logger.warning("Clip extraction timed out for %s", alert_id)
 
-        self._status[alert_id] = "failed"
+        with self._lock:
+            self._status[alert_id] = "failed"
 
     def _extract_stagnant_frame(
         self,
@@ -151,26 +193,35 @@ class ClipExtractor:
         ]
         try:
             subprocess.run(cmd, check=True, timeout=10)
-            self._clip_paths[alert_id] = output
-            self._status[alert_id] = "ready"
-            logger.info("Stagnant frame ready: %s", alert_id)
+            if output.exists() and output.stat().st_size > 100:
+                with self._lock:
+                    self._clip_paths[alert_id] = output
+                    self._status[alert_id] = "ready"
+                logger.info("Stagnant frame ready: %s", alert_id)
+            else:
+                with self._lock:
+                    self._status[alert_id] = "failed"
+                logger.warning("Stagnant frame too small for %s", alert_id)
         except (
             subprocess.CalledProcessError,
             FileNotFoundError,
             subprocess.TimeoutExpired,
         ):
             logger.warning("Stagnant frame extraction failed for %s", alert_id)
-            self._status[alert_id] = "failed"
+            with self._lock:
+                self._status[alert_id] = "failed"
 
     def get_status(self, alert_id: str) -> str | None:
         """Get extraction status: 'pending', 'ready', 'failed', or None."""
-        return self._status.get(alert_id)
+        with self._lock:
+            return self._status.get(alert_id)
 
     def get_clip_path(self, alert_id: str) -> Path | None:
         """Get path to extracted clip/frame, or None if not ready."""
-        if self._status.get(alert_id) != "ready":
-            return None
-        return self._clip_paths.get(alert_id)
+        with self._lock:
+            if self._status.get(alert_id) != "ready":
+                return None
+            return self._clip_paths.get(alert_id)
 
     def cleanup_channel(self, channel_id: int) -> None:
         """Remove all clips for a channel and clear status tracking."""
@@ -181,21 +232,23 @@ class ClipExtractor:
 
         # Clear status entries for this channel's alerts
         # (caller should clear alert store separately)
-        to_remove = [
-            aid
-            for aid, path in self._clip_paths.items()
-            if str(channel_id) in str(path)
-        ]
-        for aid in to_remove:
-            self._status.pop(aid, None)
-            self._clip_paths.pop(aid, None)
+        with self._lock:
+            to_remove = [
+                aid
+                for aid, path in self._clip_paths.items()
+                if path.parent.name == str(channel_id)
+            ]
+            for aid in to_remove:
+                self._status.pop(aid, None)
+                self._clip_paths.pop(aid, None)
 
     def cleanup_all(self) -> None:
         """Remove all clips and reset state."""
         if CLIPS_DIR.exists():
             shutil.rmtree(CLIPS_DIR, ignore_errors=True)
-        self._status.clear()
-        self._clip_paths.clear()
+        with self._lock:
+            self._status.clear()
+            self._clip_paths.clear()
 
     def shutdown(self) -> None:
         """Shutdown the thread pool."""

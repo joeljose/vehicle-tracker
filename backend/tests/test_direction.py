@@ -1,9 +1,9 @@
-"""Unit tests for line-crossing detection and calibration (pure Python)."""
+"""Unit tests for line-crossing detection and junction-side classification."""
 
 from backend.pipeline.direction import (
     LineSeg,
-    LineCalibration,
     check_line_crossing,
+    classify_crossing,
     load_lines_from_config,
 )
 
@@ -57,67 +57,39 @@ def test_diagonal_line():
     assert result is not None
 
 
-# --- Calibration tests ---
+# --- classify_crossing tests ---
 
 
-def test_calibration_after_n_observations():
-    """Calibration completes after observing enough crossings."""
-    cal = LineCalibration(HLINE, calibration_count=5)
-    assert not cal.calibrated
-
-    for _ in range(5):
-        cal.observe(1)
-
-    assert cal.calibrated
-    assert cal.entry_sign == 1
+def test_classify_left_junction_side():
+    """Left junction side: +1 crossing = entry (moving toward left/positive side)."""
+    line = LineSeg(label="North", start=(0, 50), end=(100, 50), junction_side="left")
+    assert classify_crossing(line, 1) == "entry"
+    assert classify_crossing(line, -1) == "exit"
 
 
-def test_calibration_majority_vote():
-    """Entry sign is the majority direction."""
-    cal = LineCalibration(HLINE, calibration_count=5)
-    # 3 positive, 2 negative -> entry_sign = +1
-    for d in [1, 1, -1, 1, -1]:
-        cal.observe(d)
-
-    assert cal.calibrated
-    assert cal.entry_sign == 1
+def test_classify_right_junction_side():
+    """Right junction side: -1 crossing = entry (moving toward right/negative side)."""
+    line = LineSeg(label="North", start=(0, 50), end=(100, 50), junction_side="right")
+    assert classify_crossing(line, -1) == "entry"
+    assert classify_crossing(line, 1) == "exit"
 
 
-def test_classify_after_calibration():
-    """classify() returns entry/exit after calibration."""
-    cal = LineCalibration(HLINE, calibration_count=3)
-    for _ in range(3):
-        cal.observe(1)
-
-    assert cal.classify(1) == "entry"
-    assert cal.classify(-1) == "exit"
+def test_classify_flip_reverses_polarity():
+    """Flipping junction_side reverses entry/exit classification."""
+    line_left = LineSeg(label="N", start=(0, 50), end=(100, 50), junction_side="left")
+    line_right = LineSeg(label="N", start=(0, 50), end=(100, 50), junction_side="right")
+    assert classify_crossing(line_left, 1) != classify_crossing(line_right, 1)
+    assert classify_crossing(line_left, -1) != classify_crossing(line_right, -1)
 
 
-def test_classify_before_calibration():
-    """classify() returns None before calibration."""
-    cal = LineCalibration(HLINE, calibration_count=10)
-    cal.observe(1)
-    assert cal.classify(1) is None
-
-
-def test_force_calibrate():
-    """Manual calibration overrides auto."""
-    cal = LineCalibration(HLINE, calibration_count=100)
-    cal.force_calibrate(entry_sign=-1)
-    assert cal.calibrated
-    assert cal.classify(-1) == "entry"
-    assert cal.classify(1) == "exit"
-
-
-def test_observations_stop_after_calibration():
-    """No more observations recorded after calibration."""
-    cal = LineCalibration(HLINE, calibration_count=3)
-    for _ in range(3):
-        cal.observe(1)
-    assert cal.calibrated
-
-    cal.observe(-1)  # should be ignored
-    assert len(cal.observations) == 3
+def test_classify_vertical_line():
+    """Junction side works correctly for vertical lines."""
+    line = LineSeg(label="East", start=(50, 0), end=(50, 100), junction_side="left")
+    # Left side of downward vector (50,0)->(50,100) is the left/west side
+    d = check_line_crossing(line, (40, 50), (60, 50))  # left to right
+    assert d is not None
+    # Moving from left (junction side) to right = exit
+    assert classify_crossing(line, d) == "exit"
 
 
 # --- load_lines_from_config ---
@@ -133,3 +105,25 @@ def test_load_lines_from_config():
     assert lines["north"].label == "741-North"
     assert lines["north"].start == (200, 90)
     assert lines["east"].end == (580, 800)
+
+
+def test_load_lines_from_config_with_junction_side():
+    config = {
+        "north": {
+            "label": "North",
+            "start": [200, 90],
+            "end": [450, 90],
+            "junction_side": "right",
+        },
+    }
+    lines = load_lines_from_config(config)
+    assert lines["north"].junction_side == "right"
+
+
+def test_load_lines_from_config_default_junction_side():
+    """Missing junction_side defaults to 'left'."""
+    config = {
+        "north": {"label": "North", "start": [200, 90], "end": [450, 90]},
+    }
+    lines = load_lines_from_config(config)
+    assert lines["north"].junction_side == "left"

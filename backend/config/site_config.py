@@ -1,8 +1,11 @@
 """Per-site configuration load/save."""
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_VALID_SITE_ID = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 SITES_DIR = Path(__file__).parent / "sites"
 
@@ -19,8 +22,18 @@ class SiteConfig:
         return len(self.roi_polygon) >= 3
 
 
+def _validate_site_id(site_id: str) -> None:
+    """Validate site_id to prevent path traversal."""
+    if not _VALID_SITE_ID.match(site_id):
+        raise ValueError(
+            f"Invalid site_id: {site_id!r}. "
+            "Only alphanumeric characters, hyphens, and underscores are allowed."
+        )
+
+
 def load_site_config(site_id: str, sites_dir: Path = SITES_DIR) -> SiteConfig:
     """Load site config from JSON file."""
+    _validate_site_id(site_id)
     path = sites_dir / f"{site_id}.json"
     with open(path) as f:
         data = json.load(f)
@@ -33,6 +46,7 @@ def load_site_config(site_id: str, sites_dir: Path = SITES_DIR) -> SiteConfig:
 
 def save_site_config(config: SiteConfig, sites_dir: Path = SITES_DIR) -> Path:
     """Save site config to JSON file. Returns the path written."""
+    _validate_site_id(config.site_id)
     sites_dir.mkdir(parents=True, exist_ok=True)
     path = sites_dir / f"{config.site_id}.json"
     data = {

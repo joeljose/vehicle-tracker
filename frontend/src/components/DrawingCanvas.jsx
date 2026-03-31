@@ -167,9 +167,41 @@ export default function DrawingCanvas({
         ctx.stroke();
       }
 
+      // Junction side indicator — small triangle on the junction side of the line
+      const junctionSide = line.junction_side || "left";
+      const dx = e.x - s.x;
+      const dy = e.y - s.y;
+      const lineLen = Math.sqrt(dx * dx + dy * dy);
+      if (lineLen > 0) {
+        // Normal vector (perpendicular to line): left side = (-dy, dx)
+        const nx = -dy / lineLen;
+        const ny = dx / lineLen;
+        const sign = junctionSide === "left" ? 1 : -1;
+        const midX = (s.x + e.x) / 2;
+        const midY = (s.y + e.y) / 2;
+        const offset = 16; // pixels from line
+        const triSize = 6;
+        const tipX = midX + nx * sign * offset;
+        const tipY = midY + ny * sign * offset;
+        // Triangle pointing toward the line (tip closest to line)
+        const baseX = tipX + nx * sign * triSize;
+        const baseY = tipY + ny * sign * triSize;
+        const perpX = dx / lineLen;
+        const perpY = dy / lineLen;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(baseX + perpX * triSize * 0.6, baseY + perpY * triSize * 0.6);
+        ctx.lineTo(baseX - perpX * triSize * 0.6, baseY - perpY * triSize * 0.6);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.7;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       // Label at midpoint
-      const midX = (s.x + e.x) / 2;
-      const midY = (s.y + e.y) / 2;
+      const midLx = (s.x + e.x) / 2;
+      const midLy = (s.y + e.y) / 2;
       const label = line.label || `Line ${i + 1}`;
       ctx.font = "600 12px -apple-system, BlinkMacSystemFont, sans-serif";
       const textWidth = ctx.measureText(label).width;
@@ -180,13 +212,13 @@ export default function DrawingCanvas({
 
       ctx.fillStyle = LABEL_BG;
       ctx.beginPath();
-      ctx.roundRect(midX - rectW / 2, midY - rectH - 4, rectW, rectH, 4);
+      ctx.roundRect(midLx - rectW / 2, midLy - rectH - 4, rectW, rectH, 4);
       ctx.fill();
 
       ctx.fillStyle = color;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, midX, midY - rectH / 2 - 4 + padY);
+      ctx.fillText(label, midLx, midLy - rectH / 2 - 4 + padY);
     }
 
     // Draw in-progress line (single point placed)

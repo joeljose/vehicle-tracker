@@ -10,6 +10,8 @@ Builds a GStreamer pipeline via pyservicemaker that:
   7. Captures best-photo crops per tracked vehicle (Phase 7)
 """
 
+from collections import deque
+
 from pyservicemaker import Pipeline, Flow, Probe, BatchMetadataOperator, BufferOperator
 import logging
 import os
@@ -23,15 +25,18 @@ from backend.pipeline.deepstream.config import (
 )
 from backend.pipeline.direction import (
     LineSeg,
-    LineCalibration,
     DirectionStateMachine,
     check_line_crossing,
+    classify_crossing,
 )
 from backend.pipeline.idle import IdleOptimizer
 from backend.pipeline.roi import point_in_polygon
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stitch import TrackStitcher
 from backend.pipeline.trajectory import TrajectoryBuffer
+
+# Max per-frame data entries per track (matches TrajectoryBuffer default)
+_MAX_PER_FRAME_DATA = 300
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +64,6 @@ class TrackingReporter(BatchMetadataOperator):
         self.alert_callback = alert_callback
         self.track_ended_callback = track_ended_callback
         # Line crossing state
-        self.line_calibrations: dict[str, LineCalibration] = {}
-        if lines:
-            for arm_id, line in lines.items():
-                self.line_calibrations[arm_id] = LineCalibration(line)
         self.lines = lines or {}
         self.stagnant_threshold_sec = 150.0
         self.crossings: list[dict] = []  # all crossing events
@@ -166,6 +167,21 @@ class TrackingReporter(BatchMetadataOperator):
                             traj.append(cx, cy, self.frame_count)
                             dsm = DirectionStateMachine()
 
+                        pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
+                        pfd.append(
+                            {
+                                "frame": self.frame_count,
+                                "bbox": [
+                                    int(rect.left),
+                                    int(rect.top),
+                                    int(rect.width),
+                                    int(rect.height),
+                                ],
+                                "centroid": [cx, cy],
+                                "confidence": round(obj_meta.confidence, 3),
+                                "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                            }
+                        )
                         self.active_tracks[track_id] = {
                             "label": label,
                             "first_frame": self.frame_count,
@@ -173,20 +189,7 @@ class TrackingReporter(BatchMetadataOperator):
                             "trajectory": traj,
                             "roi_active": in_roi,
                             "dsm": dsm,
-                            "per_frame_data": [
-                                {
-                                    "frame": self.frame_count,
-                                    "bbox": [
-                                        int(rect.left),
-                                        int(rect.top),
-                                        int(rect.width),
-                                        int(rect.height),
-                                    ],
-                                    "centroid": [cx, cy],
-                                    "confidence": round(obj_meta.confidence, 3),
-                                    "timestamp_ms": int(self.frame_count * (1000 / 30)),
-                                }
-                            ],
+                            "per_frame_data": pfd,
                         }
                         if not match:
                             roi_tag = "IN ROI" if in_roi else "OUT OF ROI"
@@ -230,7 +233,7 @@ class TrackingReporter(BatchMetadataOperator):
                             )
 
                         # Line crossing check (only for ROI-active tracks)
-                        if in_roi and self.line_calibrations:
+                        if in_roi and self.lines:
                             self._check_crossings(
                                 track_id, (prev_cx, prev_cy), (cx, cy)
                             )
@@ -409,28 +412,23 @@ class TrackingReporter(BatchMetadataOperator):
         curr: tuple[float, float],
     ) -> None:
         """Check if a track crossed any entry/exit line."""
-        for arm_id, cal in self.line_calibrations.items():
-            direction = check_line_crossing(cal.line, prev, curr)
+        for arm_id, line in self.lines.items():
+            direction = check_line_crossing(line, prev, curr)
             if direction is None:
                 continue
 
-            # Feed to calibration
-            cal.observe(direction)
-            if not cal.calibrated:
-                continue
-
-            crossing_type = cal.classify(direction)
+            crossing_type = classify_crossing(line, direction)
             logger.info(
                 "Track #%d crossed %s line (%s)",
                 track_id,
-                cal.line.label,
+                line.label,
                 crossing_type,
             )
             self.crossings.append(
                 {
                     "track_id": self._seq_id(track_id),
                     "arm": arm_id,
-                    "label": cal.line.label,
+                    "label": line.label,
                     "type": crossing_type,
                     "frame": self.frame_count,
                 }
@@ -442,7 +440,7 @@ class TrackingReporter(BatchMetadataOperator):
                 dsm = track_state["dsm"]
                 alert = dsm.on_crossing(
                     arm_id,
-                    cal.line.label,
+                    line.label,
                     crossing_type,
                     trajectory=track_state["trajectory"].get_full(),
                     arms=self.lines,
@@ -498,14 +496,12 @@ class TrackingReporter(BatchMetadataOperator):
             "crossings": list(self.crossings),
             "transit_alerts": list(self.transit_alerts),
             "merges": self.merge_count,
-            "calibrations": {
+            "lines": {
                 arm_id: {
-                    "label": cal.line.label,
-                    "calibrated": cal.calibrated,
-                    "entry_sign": cal.entry_sign,
-                    "observations": len(cal.observations),
+                    "label": line.label,
+                    "junction_side": line.junction_side,
                 }
-                for arm_id, cal in self.line_calibrations.items()
+                for arm_id, line in self.lines.items()
             },
         }
 

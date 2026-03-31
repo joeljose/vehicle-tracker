@@ -128,7 +128,7 @@ export async function saveSiteConfig(config) {
 }
 
 export async function loadSiteConfig(siteId) {
-  return (await request(`/site/config?site_id=${siteId}`)).json();
+  return (await request(`/site/config?site_id=${encodeURIComponent(siteId)}`)).json();
 }
 
 export async function listSiteConfigs() {

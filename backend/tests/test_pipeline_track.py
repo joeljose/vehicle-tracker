@@ -153,12 +153,21 @@ def test_track_loss_logged(caplog):
     assert "lost after" in caplog.text, "Track loss should be logged"
 
 
+def _load_config(site_id):
+    """Load site config or skip test if not found."""
+    from backend.config.site_config import load_site_config
+
+    try:
+        return load_site_config(site_id)
+    except FileNotFoundError:
+        pytest.skip(f"Site config '{site_id}' not found — save config from UI first")
+
+
 def test_roi_filtering():
     """Tracks are tagged with roi_active when ROI polygon is provided."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
-    from backend.config.site_config import load_site_config
 
-    config = load_site_config("741_73")
+    config = _load_config("741_73")
     summary = run_pipeline(str(CLIP_741_73), roi_polygon=config.roi_polygon)
 
     assert summary["unique_tracks"] > 0
@@ -171,9 +180,8 @@ def test_roi_filtering():
 def test_roi_logs_status(caplog):
     """Logs IN ROI / OUT OF ROI for tracks."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
-    from backend.config.site_config import load_site_config
 
-    config = load_site_config("lytle_south")
+    config = _load_config("lytle_south")
     with caplog.at_level("DEBUG"):
         run_pipeline(str(CLIP_LYTLE), roi_polygon=config.roi_polygon)
 
@@ -191,12 +199,11 @@ def test_no_roi_defaults_active():
 
 
 def test_line_crossing_structure():
-    """Pipeline includes crossings and calibrations when lines are configured."""
+    """Pipeline includes crossings and line info when lines are configured."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
-    from backend.config.site_config import load_site_config
     from backend.pipeline.direction import load_lines_from_config
 
-    config = load_site_config("lytle_south")
+    config = _load_config("lytle_south")
     lines = load_lines_from_config(config.entry_exit_lines)
 
     summary = run_pipeline(
@@ -207,21 +214,19 @@ def test_line_crossing_structure():
 
     assert "crossings" in summary
     assert isinstance(summary["crossings"], list)
-    assert "calibrations" in summary
-    assert len(summary["calibrations"]) == 4  # 4 arms for lytle_south
-    for arm_id, cal in summary["calibrations"].items():
-        assert "label" in cal
-        assert "calibrated" in cal
-        assert cal["observations"] >= 0
+    assert "lines" in summary
+    assert len(summary["lines"]) == 4  # 4 arms for lytle_south
+    for arm_id, line_info in summary["lines"].items():
+        assert "label" in line_info
+        assert "junction_side" in line_info
 
 
 def test_line_crossing_logged(caplog):
     """Logs line crossing events."""
     from backend.pipeline.deepstream.pipeline import run_pipeline
-    from backend.config.site_config import load_site_config
     from backend.pipeline.direction import load_lines_from_config
 
-    config = load_site_config("741_73")
+    config = _load_config("741_73")
     lines = load_lines_from_config(config.entry_exit_lines)
 
     # Use 741_73 clip with 741_73 config (ROI matches this camera)
@@ -232,8 +237,7 @@ def test_line_crossing_logged(caplog):
             lines=lines,
         )
 
-    # Should have crossing events or at least calibration observations
-    # (741_73 10s clip may be sparse — just verify no errors)
+    # 741_73 10s clip may be sparse — just verify no errors
     assert not any(r.levelname == "ERROR" for r in caplog.records)
 
 
@@ -243,4 +247,4 @@ def test_no_lines_no_crossings():
 
     summary = run_pipeline(str(CLIP_741_73))
     assert summary["crossings"] == []
-    assert summary["calibrations"] == {}
+    assert summary["lines"] == {}

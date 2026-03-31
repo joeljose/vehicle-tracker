@@ -1,7 +1,10 @@
 """FastAPI application factory."""
 
+import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,9 +19,32 @@ from backend.pipeline.clip_extractor import ClipExtractor
 from backend.pipeline.protocol import ChannelPhase, FrameResult
 
 
+log = logging.getLogger(__name__)
+
+
+def _cleanup_stale_artifacts() -> None:
+    """Remove leftover snapshots and clips from previous sessions."""
+    snapshots = Path("snapshots")
+    if snapshots.exists():
+        for child in snapshots.iterdir():
+            if child.name == ".gitkeep":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        log.info("Cleaned up stale snapshots")
+
+    clips = Path("/tmp/vt_clips")
+    if clips.exists():
+        shutil.rmtree(clips, ignore_errors=True)
+        log.info("Cleaned up stale clips")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: start WS broadcaster drain loop
+    # Startup: clean stale artifacts, start WS broadcaster drain loop
+    _cleanup_stale_artifacts()
     await app.state.ws.start()
     yield
     # Shutdown: stop WS broadcaster, clip extractor, and pipeline
@@ -74,13 +100,27 @@ def create_app(backend: str = "deepstream") -> FastAPI:
         mjpeg.on_frame(result)
         ws.on_frame(result)
 
-    # Alert callback: store in AlertStore, then push summary to WS
+    # Alert callback: store in AlertStore, then push summary to WS.
+    # If the channel is already in REVIEW phase (late arrival during transition),
+    # extract the clip immediately instead of waiting for a batch that won't come.
     def on_alert(alert: dict) -> None:
         channel = alert.get("channel", 0)
         if alert.get("type") == "stagnant_alert":
             alert_id = alert_store.add_stagnant_alert(alert, channel)
         else:
             alert_id = alert_store.add_transit_alert(alert, channel)
+
+        # Late alert: channel already transitioned to review — extract clip now
+        try:
+            phase = pipeline_backend.get_channel_phase(channel)
+            if phase == ChannelPhase.REVIEW:
+                source = pipeline_backend.channels.get(channel, "")
+                full_alert = alert_store.get_alert(alert_id)
+                if full_alert:
+                    clip_extractor.extract_single(channel, source, full_alert)
+        except KeyError:
+            pass
+
         summary = alert_store.get_ws_summary(alert_id)
         if summary:
             ws.on_alert(summary)

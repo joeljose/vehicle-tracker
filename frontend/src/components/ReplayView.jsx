@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getAlert, replayUrl, getReplayStatus, lastFrameUrl } from "../api/rest";
 import LinesOverlay from "./LinesOverlay";
 
-const TRANSIT_COLOR = "#60a5fa";
+const TRANSIT_COLOR = "#4f46e5";  // indigo for bbox
+const TRAJECTORY_COLOR = "#000000";  // black for trajectory
 const STAGNANT_COLOR = "#fbbf24";
 const ENTRY_COLOR = "#4ade80";
 const LABEL_BG = "rgba(0,0,0,0.7)";
@@ -376,9 +377,7 @@ function drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert) {
   const tx = (x) => x * scale + offsetX;
   const ty = (y) => y * scale + offsetY;
 
-  const color = TRANSIT_COLOR;
-
-  // Draw trajectory trail
+  // Draw trajectory trail (black dotted)
   const trajectory = fullAlert.full_trajectory || [];
   if (trajectory.length >= 2) {
     ctx.beginPath();
@@ -386,10 +385,10 @@ function drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert) {
     for (let i = 1; i < trajectory.length; i++) {
       ctx.lineTo(tx(trajectory[i][0]), ty(trajectory[i][1]));
     }
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = TRAJECTORY_COLOR;
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 3]);
-    ctx.globalAlpha = 0.5;
+    ctx.globalAlpha = 0.6;
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
@@ -404,9 +403,9 @@ function drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert) {
     ctx.globalAlpha = 1;
   }
 
-  // Draw bbox
+  // Draw bbox (indigo)
   const [bx, by, bw, bh] = frame.bbox;
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = TRANSIT_COLOR;
   ctx.lineWidth = 2.5;
   ctx.strokeRect(tx(bx), ty(by), bw * scale, bh * scale);
 }

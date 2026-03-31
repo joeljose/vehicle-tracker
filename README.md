@@ -1,47 +1,16 @@
 # Vehicle Tracker — Traffic Junction Monitor
 
-A GPU-accelerated vehicle tracking system for traffic junction monitoring. Detects vehicles at road junctions, determines their directional transit (entry arm to exit arm), and generates alerts with best-quality vehicle photos — all from a single consumer GPU.
+GPU-accelerated vehicle tracking for traffic junction monitoring. Detects vehicles, determines directional transit (entry arm to exit arm), and generates alerts with best-quality vehicle photos — all from a single consumer GPU.
 
 ## Features
 
-- **Directional transit detection** — tracks vehicles through a junction and reports entry/exit directions (e.g., "west to north")
-- **Stagnant vehicle alerts** — detects vehicles stopped for configurable duration (default 2.5 min)
-- **Best-photo capture** — automatically saves the highest quality frame of each tracked vehicle
-- **Multi-channel** — up to 8 channels sharing a single GPU pipeline with independent phase transitions (~280 MB VRAM saved per channel vs separate pipelines)
-- **4-phase workflow** — Setup (draw ROI/lines) -> Analytics (run detection) -> Review (replay alerts) -> Teardown
-- **Browser-based UI** — React frontend with live MJPEG video, ROI/line drawing tools, alert feed, and video replay
-- **Real-time streaming** — MJPEG video with detection overlays at ~15fps, WebSocket alerts, stats bar
-- **Video replay** — clip extraction with bounding box overlay for reviewing transit events
-- **Site configs** — save and load ROI/line configurations per junction
-
-## Architecture
-
-```
-Browser (React) <-> FastAPI (REST + WebSocket + MJPEG) <-> DeepStream Pipeline (GPU)
-```
-
-The FastAPI layer communicates with the pipeline through a `PipelineBackend` Protocol interface, keeping the API layer pipeline-agnostic.
-
-**Shared pipeline topology (M5):**
-```
-src_0 (nvurisrcbin) ─┐
-src_1 (nvurisrcbin) ─┤
-  ...                ├─> nvstreammux -> nvinfer (TrafficCamNet) -> nvtracker (NvDCF) -> nvstreamdemux
-                     │                                                                    ├─> ch0: OSD -> MJPEG (~15fps)
-                     │                                                                    ├─> ch1: OSD -> MJPEG (~15fps)
-                     │   BatchMetadataRouter probe routes per-source metadata              ...
-```
-
-## Milestones
-
-| Milestone | Status | Tag | Tests |
-|-----------|--------|-----|-------|
-| M1 — DeepStream pipeline | Complete | v0.1.0 | 177 |
-| M2 — API layer (FastAPI REST/WS/MJPEG) | Complete | v0.2.0 | 237 |
-| M3 — React UI (4-phase workflow, drawing tools) | Complete | v0.3.0 | 286 |
-| M4 — DeepStream-FastAPI integration | Complete | v0.4.0 | 312 |
-| M5 — Multi-channel shared pipeline | Complete | v0.5.0 | 336 |
-| M6 — YouTube Live streams | Complete | v0.6.0 | 371 |
+- **Directional transit detection** — entry/exit directions (e.g., "west to north")
+- **Stagnant vehicle alerts** — vehicles stopped for configurable duration (default 2.5 min)
+- **Best-photo capture** — highest quality frame of each tracked vehicle
+- **Multi-channel** — up to 8 channels sharing a single GPU pipeline (~280 MB VRAM saved per channel)
+- **YouTube Live support** — monitor live traffic camera streams directly
+- **4-phase workflow** — Setup (draw ROI/lines) -> Analytics (run detection) -> Review (replay alerts)
+- **Browser UI** — live MJPEG video, ROI/line drawing tools, alert feed, video replay
 
 ## Prerequisites
 
@@ -56,70 +25,102 @@ src_1 (nvurisrcbin) ─┤
 git clone git@github.com:joeljose/vehicle-tracker.git
 cd vehicle-tracker
 
-make setup    # Create .env, cache dirs, build Docker images
-make dev      # Start containers (backend idle, frontend hot-reload)
-make start    # Launch backend server (uvicorn)
+# 1. First-time setup (creates .env, builds Docker images)
+make setup
 
-# Open http://localhost:5173 in your browser
+# 2. Start containers (backend idle, frontend hot-reloading)
+make dev
+
+# 3. Launch the backend server
+make start
+
+# 4. Open the UI
+#    http://localhost:5173
 ```
 
-## Development Workflow
+**That's it.** The UI will show a "Start Pipeline" button. Click it, then add a video source.
 
-All commands go through the Makefile. Run `make help` to see all targets.
+### Test sources
 
-### Setup & Lifecycle
+| Source | Path / URL |
+|--------|------------|
+| File (1 min, Lytle South) | `/data/test_clips/lytle_south_1min.mp4` |
+| File (10s, 741 & 73) | `/data/test_clips/741_73_10s.mp4` |
+| YouTube Live | Paste any YouTube Live traffic cam URL |
+
+> File paths are **inside the container** — the `data_collection/` directory is mounted at `/data/`.
+
+### Workflow (per channel)
+
+1. **Setup** — Video loops. Draw an ROI polygon, then draw entry/exit lines. Load a saved config with the "Load Site" dropdown if available.
+2. **Start Analytics** — Click "Start Analytics". The pipeline runs detection/tracking on the video (plays once for files, continuous for live streams).
+3. **Review** — After the video ends (or you click "Stop Analytics"), alerts appear. Click an alert to replay the clip with bounding box overlay.
+
+## Day-to-Day Development
+
+All commands go through the **Makefile**. Never call `docker compose` directly (causes root-owned files).
+
+### Lifecycle
 
 ```bash
-make setup          # First-time setup: .env, cache dirs, build images
-make dev            # Start dev containers
-make down           # Stop all containers
-make clean          # Stop + remove caches, snapshots, build artifacts
-make rebuild        # Force rebuild Docker images (after Dockerfile changes)
+make dev              # Start containers (run once per session)
+make start            # Launch backend server
+make restart          # Restart backend (after Python code changes)
+make stop-server      # Stop backend (container stays up)
+make down             # Stop everything
 ```
 
-### Backend Server
+> **After editing Python files**, run `make restart` to pick up changes. The frontend hot-reloads automatically — no restart needed for JS/JSX changes.
+
+### Testing & Quality
 
 ```bash
-make start          # Start uvicorn inside backend container
-make stop-server    # Stop uvicorn (container keeps running)
-make restart        # Stop + start uvicorn
-make logs           # Tail backend server logs
+make test             # Run all tests (372 tests, no GPU needed)
+make test-v           # Verbose (show test names)
+make lint             # Ruff check
+make format           # Ruff auto-fix
 ```
 
-### Development
+### Debugging
 
 ```bash
-make shell          # Bash into backend container
-make shell-frontend # Shell into frontend container
-make test           # Run pytest (336 tests)
-make test-v         # Run pytest verbose
-make lint           # Run ruff check
-make format         # Run ruff format (auto-fix)
+make logs             # Tail backend server logs
+make status           # Container health + GPU memory
+make shell            # Bash into backend container
+make shell-frontend   # Shell into frontend container
 ```
 
-### Data & Debugging
+### Data
 
 ```bash
-make status         # Container status, server health, GPU memory
-make clip SRC="/data/site_videos/video.mp4" START=30 DURATION=60 OUT="/data/test_clips/clip.mp4"
+# Extract a test clip from a full video
+make clip SRC="/data/site_videos/full_video.mp4" START=30 DURATION=60 OUT="/data/test_clips/clip.mp4"
 ```
 
 ### Release
 
 ```bash
-make version        # Show current version (from git tags via setuptools-scm)
-make tag            # Show version info, instructions for tagging
+make version          # Show current version (from git tags)
+make tag              # Show recent tags + instructions
+# To release: git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-## Testing
+## Architecture
 
-```bash
-make test           # Run all tests
-make test-v         # Verbose output with test names
-make lint           # Check for lint issues
+```
+Browser (React) <-> FastAPI (REST + WebSocket + MJPEG) <-> DeepStream Pipeline (GPU)
 ```
 
-Tests run inside the Docker container using pytest. The test suite uses a `FakeBackend` that implements the same `PipelineBackend` Protocol as the real DeepStream pipeline, so no GPU is needed for tests.
+The FastAPI layer communicates with the pipeline through a `PipelineBackend` Protocol interface, keeping the API layer pipeline-agnostic.
+
+**Shared pipeline topology:**
+```
+src_0 (nvurisrcbin) --+
+src_1 (nvurisrcbin) --+--> nvstreammux -> nvinfer -> nvtracker -> nvstreamdemux
+                      |    (TrafficCamNet)  (NvDCF)                  |-> ch0: OSD -> MJPEG
+                      |                                              |-> ch1: OSD -> MJPEG
+                      |   BatchMetadataRouter routes per-source metadata
+```
 
 ## Project Structure
 
@@ -135,27 +136,34 @@ vehicle-tracker/
       roi.py             # ROI polygon filtering
       alerts.py          # AlertStore (transit + stagnant)
       snapshot.py        # Best-photo capture
-      stitch.py          # Track stitching across ID switches
       clip_extractor.py  # ffmpeg clip extraction for replay
-      fake.py            # Test backend (no GPU)
-    tests/               # 336 tests
+      fake.py            # Test backend (no GPU needed)
+    tests/               # 372 tests
     main.py              # FastAPI app factory
-    Dockerfile           # Dev image (DeepStream + ffmpeg + pip deps)
-    requirements.txt
+    Dockerfile
   frontend/
     src/
       pages/             # Home, Channel
       components/        # AlertFeed, ReplayView, DrawingCanvas, StatsBar
-      contexts/          # React Context for state management
+      contexts/          # React Context state management
       api/               # REST + WebSocket clients
   config/deepstream/     # DeepStream model configs
   data_collection/       # Test clips + site videos (gitignored)
   models/                # TensorRT engines (gitignored)
   docker-compose.dev.yml
   Makefile               # All dev commands (run `make help`)
-  prd.md                 # Product Requirements Document
-  vehicle_tracker_design.md  # Technical Design Document
 ```
+
+## Milestones
+
+| Milestone | Tag | Tests |
+|-----------|-----|-------|
+| M1 — DeepStream pipeline | v0.1.0 | 177 |
+| M2 — API layer (FastAPI REST/WS/MJPEG) | v0.2.0 | 237 |
+| M3 — React UI (4-phase workflow) | v0.3.0 | 286 |
+| M4 — DeepStream-FastAPI integration | v0.4.0 | 312 |
+| M5 — Multi-channel shared pipeline | v0.5.0 | 336 |
+| M6 — YouTube Live streams | v0.6.0 | 371 |
 
 ## Target Junctions
 
