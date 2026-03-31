@@ -29,14 +29,52 @@ from backend.pipeline.stream_recovery import CircuitBreaker
 logger = logging.getLogger(__name__)
 
 
+class CleanFrameExtractor(BufferOperator):
+    """Pre-OSD probe that captures clean frames (no bounding box overlays).
+
+    Used for best-photo crops and last-frame capture. Runs every frame
+    (not rate-limited) because best-photo needs to check every frame for
+    pending crops.
+    """
+
+    def __init__(self, reporter: TrackingReporter):
+        super().__init__()
+        self._reporter = reporter
+        self.last_frame: bytes | None = None  # most recent clean JPEG
+
+    def handle_buffer(self, buffer):
+        try:
+            import cupy as cp
+            import cv2
+
+            for batch_id in range(buffer.batch_size):
+                tensor = buffer.extract(batch_id)
+                gpu_arr = cp.from_dlpack(tensor)
+                frame = cp.asnumpy(gpu_arr)
+
+                # Best-photo crop extraction (clean, no OSD annotations)
+                best_photo = self._reporter.best_photo
+                if best_photo and best_photo.pending_crops:
+                    best_photo.extract_crops(frame)
+
+                # Keep most recent clean frame as JPEG for Phase 3 replay
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                _, jpeg_buf = cv2.imencode(
+                    ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                )
+                self.last_frame = jpeg_buf.tobytes()
+
+            return True
+        except Exception as e:
+            logger.error("CleanFrameExtractor: %s", e)
+            return True
+
+
 class MjpegExtractor(BufferOperator):
-    """BufferOperator that extracts annotated JPEG frames from post-OSD buffers.
+    """Post-OSD probe that extracts annotated JPEG frames for live streaming.
 
     Runs on the OSD branch of the pipeline. Converts GPU buffer to numpy
     via CuPy, encodes to JPEG, and invokes the frame callback at ~15fps.
-
-    Also keeps a reference to the most recent JPEG as `last_frame` for
-    Phase 3 frozen-frame replay (YouTube Live sources have no recorded video).
     """
 
     def __init__(self, channel_id: int, callback, reporter: TrackingReporter):
@@ -47,25 +85,10 @@ class MjpegExtractor(BufferOperator):
         self._frame_count = 0
         self._last_emit_time = 0.0
         self._min_interval = 1.0 / 15.0  # ~15fps cap
-        self.last_frame: bytes | None = None  # most recent JPEG for Phase 3 replay
 
     def handle_buffer(self, buffer):
         try:
             self._frame_count += 1
-
-            import cupy as cp
-            import cv2
-
-            # Extract best-photo crops on every frame (not rate-limited).
-            # Runs post-OSD so crops include annotations — acceptable until
-            # pyservicemaker supports tee without stalling BufferOperator.
-            best_photo = self._reporter.best_photo
-            if best_photo and best_photo.pending_crops:
-                for batch_id in range(buffer.batch_size):
-                    tensor = buffer.extract(batch_id)
-                    gpu_arr = cp.from_dlpack(tensor)
-                    frame = cp.asnumpy(gpu_arr)
-                    best_photo.extract_crops(frame)
 
             # Rate limit MJPEG emission to ~15fps
             now = time.monotonic()
@@ -74,6 +97,9 @@ class MjpegExtractor(BufferOperator):
 
             if self._callback is None:
                 return True
+
+            import cupy as cp
+            import cv2
 
             for batch_id in range(buffer.batch_size):
                 tensor = buffer.extract(batch_id)
@@ -105,9 +131,6 @@ class MjpegExtractor(BufferOperator):
                             )
                         )
 
-                # Keep reference to most recent JPEG for Phase 3 replay
-                self.last_frame = jpeg_bytes
-
                 result = FrameResult(
                     channel_id=self._channel_id,
                     frame_number=self._reporter.frame_count,
@@ -135,6 +158,7 @@ class _ChannelState:
     pipeline: object | None = None  # pyservicemaker Pipeline
     reporter: TrackingReporter | None = None
     best_photo: BestPhotoTracker | None = None
+    clean_extractor: CleanFrameExtractor | None = None
     mjpeg_extractor: MjpegExtractor | None = None
     roi_polygon: list[tuple[float, float]] | None = None
     entry_exit_lines: dict = field(default_factory=dict)
@@ -427,11 +451,12 @@ class DeepStreamPipeline:
 
             _threading.Thread(target=_deferred_stop, daemon=True).start()
 
-        # Disable MJPEG callbacks on all channels (prevent stale frames)
+        # Disable callbacks on all channels (prevent stale frames)
         for state in self._states.values():
             if state.mjpeg_extractor:
                 state.mjpeg_extractor._callback = None
                 state.mjpeg_extractor = None
+            state.clean_extractor = None
             state.pipeline = None
             state.reporter = None
             state.best_photo = None
@@ -516,41 +541,67 @@ class DeepStreamPipeline:
         def on_frame(result):
             self._safe_callback(self._frame_callback, result)
 
+        # Clean frame extractor (pre-OSD, for best photos + last frame)
+        clean_extractor = CleanFrameExtractor(reporter)
+        state.clean_extractor = clean_extractor
+
         mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
         state.mjpeg_extractor = mjpeg_extractor
 
         # Create demux output branch BEFORE source — nvstreamdemux can't
         # allocate request pads while data is already flowing through it.
         #
-        # Single chain (tee stalls with pyservicemaker's BufferOperator):
-        # demux → queue → conv_pre(RGBA) → caps_pre(RGBA) [FrameExtractor: clean crops]
-        #       → OSD → conv_post(RGB) → caps_post(RGB) [MjpegExtractor: annotated MJPEG]
-        #       → fakesink
+        # 3-converter chain for clean + annotated frame extraction:
+        # demux → queue → conv1(RGB) → caps1(RGB) [CleanFrameExtractor]
+        #       → conv2(RGBA) → caps2(RGBA) → OSD
+        #       → conv3(RGB) → caps3(RGB) [MjpegExtractor] → fakesink
         q_name = f"q_{src_idx}"
+        conv1_name = f"conv1_{src_idx}"
+        caps1_name = f"caps1_{src_idx}"
+        conv2_name = f"conv2_{src_idx}"
+        caps2_name = f"caps2_{src_idx}"
         osd_name = f"osd_{src_idx}"
-        conv_name = f"conv_{src_idx}"
-        caps_name = f"caps_{src_idx}"
+        conv3_name = f"conv3_{src_idx}"
+        caps3_name = f"caps3_{src_idx}"
         sink_name = f"sink_{src_idx}"
-        # Add all elements first, then link (pyservicemaker requires
-        # elements to exist before linking)
+
         pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
-        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0, "display-text": False})
-        pipeline.add("nvvideoconvert", conv_name, {})
+        # Pre-OSD: convert to RGB for clean frame extraction
+        pipeline.add("nvvideoconvert", conv1_name, {})
         pipeline.add(
-            "capsfilter",
-            caps_name,
-            {
-                "caps": "video/x-raw(memory:NVMM),format=RGB",
-            },
+            "capsfilter", caps1_name,
+            {"caps": "video/x-raw(memory:NVMM),format=RGB"},
+        )
+        # Back to RGBA for OSD input
+        pipeline.add("nvvideoconvert", conv2_name, {})
+        pipeline.add(
+            "capsfilter", caps2_name,
+            {"caps": "video/x-raw(memory:NVMM),format=RGBA"},
+        )
+        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0, "display-text": False})
+        # Post-OSD: convert to RGB for MJPEG streaming
+        pipeline.add("nvvideoconvert", conv3_name, {})
+        pipeline.add(
+            "capsfilter", caps3_name,
+            {"caps": "video/x-raw(memory:NVMM),format=RGB"},
         )
         pipeline.add("fakesink", sink_name, {"sync": True})
 
+        # Link: demux → queue → conv1 → caps1
         pipeline.link(("demux", q_name), ("src_%u", ""))
-        pipeline.link(q_name, osd_name)
+        pipeline.link(q_name, conv1_name, caps1_name)
 
-        # Post-OSD → RGB for annotated MJPEG
-        pipeline.link(osd_name, conv_name, caps_name, sink_name)
-        pipeline.attach(caps_name, Probe(f"mjpeg_{src_idx}", mjpeg_extractor))
+        # Attach clean frame probe (pre-OSD, RGB)
+        pipeline.attach(caps1_name, Probe(f"clean_{src_idx}", clean_extractor))
+
+        # Link: caps1 → conv2 → caps2 → OSD → conv3 → caps3 → sink
+        pipeline.link(
+            caps1_name, conv2_name, caps2_name,
+            osd_name, conv3_name, caps3_name, sink_name,
+        )
+
+        # Attach MJPEG probe (post-OSD, RGB)
+        pipeline.attach(caps3_name, Probe(f"mjpeg_{src_idx}", mjpeg_extractor))
 
         # Add source to mux AFTER demux branch is ready
         src_name = f"src_{src_idx}"
@@ -608,6 +659,7 @@ class DeepStreamPipeline:
         if state.mjpeg_extractor:
             state.mjpeg_extractor._callback = None
             state.mjpeg_extractor = None
+        state.clean_extractor = None
 
     def _cleanup_channel_snapshots(self, channel_id: int) -> None:
         """Remove snapshot directory for a channel."""
@@ -892,13 +944,13 @@ class DeepStreamPipeline:
         self._ws_broadcaster = broadcaster
 
     def _persist_last_frame(self, channel_id: int) -> None:
-        """Save the last MJPEG frame to disk for Phase 3 replay."""
+        """Save the last clean frame to disk for Phase 3 replay."""
         state = self._states.get(channel_id)
         if state is None:
             return
         jpeg = None
-        if state.mjpeg_extractor and state.mjpeg_extractor.last_frame:
-            jpeg = state.mjpeg_extractor.last_frame
+        if state.clean_extractor and state.clean_extractor.last_frame:
+            jpeg = state.clean_extractor.last_frame
         if not isinstance(jpeg, bytes):
             return
 
