@@ -23,18 +23,13 @@ def mock_psm(monkeypatch):
     mock_pipeline.get_bus.return_value.connect = MagicMock()
     mock_pipeline.__getitem__ = MagicMock(return_value=MagicMock())
 
-    mock_flow = MagicMock()
-    mock_flow.batch_capture.return_value.infer.return_value._streams = ["infer_0"]
-
     with patch("backend.pipeline.deepstream.adapter.Pipeline", return_value=mock_pipeline), \
-         patch("backend.pipeline.deepstream.adapter.Flow", return_value=mock_flow), \
          patch("backend.pipeline.deepstream.adapter.Probe"), \
-         patch("backend.pipeline.deepstream.adapter.FrameExtractor"), \
          patch("backend.pipeline.deepstream.adapter.MjpegExtractor"), \
          patch("backend.pipeline.deepstream.adapter.TrackingReporter") as mock_reporter_cls, \
          patch("backend.pipeline.deepstream.adapter.load_labels", return_value={0: "car"}), \
          patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"), \
-         patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter") as mock_router_cls:
+         patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter"):
 
         # Configure mock reporter
         mock_reporter = MagicMock()
@@ -214,8 +209,8 @@ class TestPhaseTransitions:
         adapter.add_channel(0, str(video))
         adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
 
-        # Simulate EOS
-        adapter._on_eos(0)
+        # Simulate per-source EOS
+        adapter._on_source_eos(0)
         assert adapter.get_channel_phase(0) == ChannelPhase.REVIEW
 
     def test_get_phase_nonexistent_raises(self, adapter):
@@ -398,3 +393,182 @@ class TestTrackingReporterCallbacks:
 
         assert len(ended) == 1
         assert ended[0]["track_id"] == reporter._seq_id(10)
+
+
+class TestSoftRemoval:
+    """P2: soft-removal of channels from the shared pipeline."""
+
+    def test_soft_remove_disables_mjpeg(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+        state = adapter._states[0]
+
+        # MjpegExtractor exists before removal
+        assert state.mjpeg_extractor is not None
+
+        adapter._soft_remove_source(0)
+        assert state.mjpeg_extractor is None
+        assert state.pipeline is None
+        assert state.reporter is None
+
+    def test_soft_remove_clears_source_idx(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+
+        adapter._soft_remove_source(0)
+        state = adapter._states[0]
+        assert state._source_idx is None
+        assert state._src_name is None
+
+    def test_soft_remove_idempotent(self, adapter, tmp_path):
+        """Soft-removing twice should not raise."""
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+
+        adapter._soft_remove_source(0)
+        adapter._soft_remove_source(0)  # second call — no-op
+
+    def test_remove_channel_keeps_shared_pipeline_for_others(self, adapter, tmp_path):
+        adapter.start()
+        v0 = tmp_path / "a.mp4"
+        v0.write_bytes(b"fake")
+        v1 = tmp_path / "b.mp4"
+        v1.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v0))
+        adapter.add_channel(1, str(v1))
+        adapter.remove_channel(0)
+
+        assert adapter._shared_pipeline is not None
+        assert 1 in adapter.channels
+        assert adapter._states[1].pipeline is not None
+
+
+class TestSourceIndexing:
+    """P2: source_idx is monotonic and used as batch_router key."""
+
+    def test_source_idx_is_monotonic(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v))
+        idx0 = adapter._states[0]._source_idx
+
+        adapter.remove_channel(0)
+
+        adapter.add_channel(0, str(v))
+        idx1 = adapter._states[0]._source_idx
+
+        assert idx1 > idx0, "source_idx must increase even after remove+re-add"
+
+    def test_source_idx_independent_of_channel_id(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+
+        # Add channel 5 first — should get source_idx 0
+        adapter.add_channel(5, str(v))
+        assert adapter._states[5]._source_idx == 0
+
+        # Add channel 2 next — should get source_idx 1
+        adapter.add_channel(2, str(v))
+        assert adapter._states[2]._source_idx == 1
+
+    def test_element_names_use_source_idx(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+
+        state = adapter._states[0]
+        assert state._src_name == f"src_{state._source_idx}"
+
+
+class TestPhaseTransitionSharedPipeline:
+    """P2: phase transitions on the shared pipeline."""
+
+    def test_analytics_creates_new_source_idx(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v))
+        setup_idx = adapter._states[0]._source_idx
+
+        roi = [(0, 0), (100, 0), (100, 100), (0, 100)]
+        lines = {"north": {"label": "North", "start": [0, 0], "end": [100, 0]}}
+        adapter.configure_channel(0, roi, lines)
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+
+        analytics_idx = adapter._states[0]._source_idx
+        assert analytics_idx > setup_idx, "analytics source gets new source_idx"
+
+    def test_analytics_preserves_roi_config(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+
+        roi = [(0, 0), (100, 0), (100, 100), (0, 100)]
+        lines = {"north": {"label": "North", "start": [0, 0], "end": [100, 0]}}
+        adapter.configure_channel(0, roi, lines)
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+
+        state = adapter._states[0]
+        assert state.roi_polygon == roi
+        assert state.entry_exit_lines == lines
+
+    def test_eos_does_not_transition_non_analytics(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+
+        # Channel is in SETUP, EOS should not transition
+        adapter._on_source_eos(0)
+        assert adapter.get_channel_phase(0) == ChannelPhase.SETUP
+
+    def test_eos_fires_phase_callback(self, adapter, tmp_path):
+        adapter.start()
+        v = tmp_path / "a.mp4"
+        v.write_bytes(b"fake")
+        adapter.add_channel(0, str(v))
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+
+        callbacks = []
+        adapter.register_phase_callback(
+            lambda ch, new, old: callbacks.append((ch, new, old))
+        )
+
+        adapter._on_source_eos(0)
+        assert len(callbacks) == 1
+        assert callbacks[0] == (0, ChannelPhase.REVIEW, ChannelPhase.ANALYTICS)
+
+    def test_two_channels_independent_phase_transitions(self, adapter, tmp_path):
+        adapter.start()
+        v0 = tmp_path / "a.mp4"
+        v0.write_bytes(b"fake")
+        v1 = tmp_path / "b.mp4"
+        v1.write_bytes(b"fake")
+
+        adapter.add_channel(0, str(v0))
+        adapter.add_channel(1, str(v1))
+
+        roi = [(0, 0), (100, 0), (100, 100), (0, 100)]
+        lines = {"n": {"label": "N", "start": [0, 0], "end": [100, 0]}}
+        adapter.configure_channel(0, roi, lines)
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+
+        # Channel 0 is analytics, channel 1 still setup
+        assert adapter.get_channel_phase(0) == ChannelPhase.ANALYTICS
+        assert adapter.get_channel_phase(1) == ChannelPhase.SETUP
+        # Both still have pipeline references
+        assert adapter._states[0].pipeline is not None
+        assert adapter._states[1].pipeline is not None

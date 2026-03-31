@@ -1,8 +1,9 @@
 """DeepStreamPipeline adapter — implements PipelineBackend Protocol.
 
-Wraps existing DeepStream components (TrackingReporter, FrameExtractor,
-build_pipeline) into a multi-channel streaming model with per-channel
-pipeline lifecycle and asyncio thread bridging.
+Uses a single shared GStreamer pipeline for all channels:
+nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG.
+Channels are added/removed dynamically via soft-removal (pyservicemaker
+has no element remove API, so sources drain via file-loop=False).
 """
 
 import asyncio
@@ -12,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from pyservicemaker import Pipeline, Flow, Probe, BufferOperator
+from pyservicemaker import Pipeline, Probe, BufferOperator
 
 from backend.pipeline.deepstream.config import (
     PGIE_CONFIG,
@@ -20,7 +21,7 @@ from backend.pipeline.deepstream.config import (
     TRACKER_LIB,
     load_labels,
 )
-from backend.pipeline.deepstream.pipeline import TrackingReporter, FrameExtractor
+from backend.pipeline.deepstream.pipeline import TrackingReporter
 from backend.pipeline.protocol import ChannelPhase, Detection, FrameResult
 from backend.pipeline.snapshot import BestPhotoTracker
 
@@ -120,6 +121,8 @@ class _ChannelState:
     mjpeg_extractor: MjpegExtractor | None = None
     roi_polygon: list[tuple[float, float]] | None = None
     entry_exit_lines: dict = field(default_factory=dict)
+    _source_idx: int | None = None  # mux pad index (matches frame_meta.source_id)
+    _src_name: str | None = None  # GStreamer element name (e.g. "src_0")
 
 
 class DeepStreamPipeline:
@@ -159,7 +162,7 @@ class DeepStreamPipeline:
 
     def stop(self) -> None:
         for channel_id in list(self._states):
-            self._stop_channel_pipeline(channel_id)
+            self._soft_remove_source(channel_id)
         self.channels.clear()
         self._states.clear()
         if self._shared_pipeline is not None:
@@ -182,10 +185,9 @@ class DeepStreamPipeline:
     def remove_channel(self, channel_id: int) -> None:
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")
-        self._stop_channel_pipeline(channel_id)
+        self._soft_remove_source(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
-        # Destroy shared pipeline if no channels remain
         if not self._states and self._shared_pipeline is not None:
             self._destroy_shared_pipeline()
         logger.info("Channel %d removed", channel_id)
@@ -211,11 +213,12 @@ class DeepStreamPipeline:
         old_phase = state.phase
 
         if phase == ChannelPhase.ANALYTICS:
-            self._stop_channel_pipeline(channel_id)
-            self._start_analytics_pipeline(channel_id)
+            # Soft-remove setup source, add analytics source (non-looping)
+            self._soft_remove_source(channel_id)
+            self._add_analytics_source(channel_id)
             state.phase = ChannelPhase.ANALYTICS
         elif phase == ChannelPhase.REVIEW:
-            self._stop_channel_pipeline(channel_id)
+            self._soft_remove_source(channel_id)
             state.phase = ChannelPhase.REVIEW
         else:
             state.phase = phase
@@ -340,28 +343,52 @@ class DeepStreamPipeline:
         pipeline.link("tracker", "demux")
 
         self._shared_pipeline = pipeline
-        pipeline.start()
+        pipeline.start(on_message=self._on_pipeline_message)
         logger.info("Shared pipeline created and started")
 
-    def _add_channel_to_pipeline(self, channel_id: int) -> None:
-        """Add a source and per-channel output branch to the shared pipeline."""
+    def _add_channel_to_pipeline(
+        self, channel_id: int, *, file_loop: bool = True,
+        roi_polygon=None, lines=None,
+        alert_callback=None, track_ended_callback=None,
+        eos_callback=None,
+    ) -> None:
+        """Add a source and per-channel output branch to the shared pipeline.
+
+        Args:
+            file_loop: True for setup (loops), False for analytics (single play).
+            roi_polygon: ROI polygon for analytics reporter.
+            lines: LineSeg dict for analytics reporter.
+            alert_callback: Transit alert callback (analytics only).
+            track_ended_callback: Track ended callback (analytics only).
+            eos_callback: Called when this source stops producing frames.
+        """
         state = self._states[channel_id]
         source = state.source
         file_uri = f"file://{os.path.abspath(source)}"
         pipeline = self._shared_pipeline
 
-        # Per-channel reporter (preview mode — no ROI/lines)
+        # Assign monotonic source index (matches mux pad / frame_meta.source_id)
+        src_idx = self._source_index
+        self._source_index += 1
+        state._source_idx = src_idx
+
+        # Per-channel reporter
         best_photo = BestPhotoTracker()
         state.best_photo = best_photo
         reporter = TrackingReporter(
             self._labels,
-            roi_polygon=None,
-            lines=None,
+            roi_polygon=roi_polygon,
+            lines=lines,
             best_photo=best_photo,
             channel_id=channel_id,
+            alert_callback=alert_callback,
+            track_ended_callback=track_ended_callback,
         )
         state.reporter = reporter
-        self._batch_router.add_reporter(channel_id, reporter)
+        self._batch_router.add_reporter(src_idx, reporter)
+
+        if eos_callback is not None:
+            self._batch_router.watch_for_eos(src_idx, eos_callback)
 
         # Frame callback bridged to asyncio
         def on_frame(result):
@@ -369,25 +396,22 @@ class DeepStreamPipeline:
 
         mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
         state.mjpeg_extractor = mjpeg_extractor
-        frame_extractor = FrameExtractor(best_photo)
 
         # Add source to mux
-        src_idx = self._source_index
-        self._source_index += 1
-        src_name = f"src_{channel_id}"
+        src_name = f"src_{src_idx}"
+        state._src_name = src_name
         pipeline.add("nvurisrcbin", src_name, {
             "uri": file_uri,
-            "file-loop": True,  # preview loops
+            "file-loop": file_loop,
         })
         pipeline.link((src_name, "mux"), ("", "sink_%u"))
-        state._src_name = src_name
 
         # Per-channel demux output → OSD → MJPEG
-        q_name = f"q_{channel_id}"
-        osd_name = f"osd_{channel_id}"
-        conv_name = f"conv_{channel_id}"
-        caps_name = f"caps_{channel_id}"
-        sink_name = f"sink_{channel_id}"
+        q_name = f"q_{src_idx}"
+        osd_name = f"osd_{src_idx}"
+        conv_name = f"conv_{src_idx}"
+        caps_name = f"caps_{src_idx}"
+        sink_name = f"sink_{src_idx}"
         pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
         pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
         pipeline.add("nvvideoconvert", conv_name, {})
@@ -397,10 +421,11 @@ class DeepStreamPipeline:
         pipeline.add("fakesink", sink_name, {"sync": True})
         pipeline.link(("demux", q_name), ("src_%u", ""))
         pipeline.link(q_name, osd_name, conv_name, caps_name, sink_name)
-        pipeline.attach(caps_name, Probe(f"mjpeg_{channel_id}", mjpeg_extractor))
+        pipeline.attach(caps_name, Probe(f"mjpeg_{src_idx}", mjpeg_extractor))
 
         state.pipeline = pipeline
-        logger.info("Channel %d added to shared pipeline", channel_id)
+        logger.info("Channel %d added to shared pipeline (src_idx=%d, loop=%s)",
+                     channel_id, src_idx, file_loop)
 
     def _destroy_shared_pipeline(self) -> None:
         """Tear down the shared pipeline."""
@@ -421,115 +446,66 @@ class DeepStreamPipeline:
         _threading.Thread(target=_deferred_stop, daemon=True).start()
         logger.info("Shared pipeline destroyed")
 
-    # -- Legacy pipeline builders (kept for reference, will be removed) --
+    def _finalize_channel_state(self, channel_id: int) -> None:
+        """Finalize reporter state: save tracks, photos, disable MJPEG."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
 
-    def _start_preview_pipeline(self, channel_id: int) -> None:
-        """Build and start a looping preview pipeline (Setup phase)."""
+        if state.reporter:
+            for tid, sstate in list(state.reporter.stitcher.lost_tracks.items()):
+                state.reporter._finalize_lost_track(tid, sstate)
+            state.reporter.stitcher.lost_tracks.clear()
+
+            if state.best_photo:
+                for tid in list(state.reporter.active_tracks):
+                    seq_tid = state.reporter._seq_id(tid)
+                    state.best_photo.save(seq_tid, state.reporter.snapshot_dir)
+
+        if state.mjpeg_extractor:
+            state.mjpeg_extractor._callback = None
+            state.mjpeg_extractor = None
+
+    def _soft_remove_source(self, channel_id: int) -> None:
+        """Soft-remove a channel's source from the shared pipeline.
+
+        Since pyservicemaker has no remove/unlink API, we:
+        1. Finalize reporter state (save tracks/photos)
+        2. Remove reporter from batch router (metadata ignored)
+        3. Set file-loop=False on nvurisrcbin (source drains to EOS)
+        4. Clear state references
+
+        GStreamer elements stay in the pipeline but become dormant after EOS.
+        """
+        state = self._states.get(channel_id)
+        if state is None or state.pipeline is None:
+            return
+
+        self._finalize_channel_state(channel_id)
+
+        # Remove from batch router
+        if self._batch_router is not None and state._source_idx is not None:
+            self._batch_router.remove_reporter(state._source_idx)
+            self._batch_router.unwatch_eos(state._source_idx)
+
+        # Drain source (set file-loop=False so it reaches EOS)
+        if state._src_name and self._shared_pipeline is not None:
+            try:
+                self._shared_pipeline[state._src_name].set({"file-loop": False})
+            except Exception:
+                pass
+
+        state.pipeline = None
+        state.reporter = None
+        state.best_photo = None
+        state._source_idx = None
+        state._src_name = None
+        logger.debug("Soft-removed source for channel %d", channel_id)
+
+    def _add_analytics_source(self, channel_id: int) -> None:
+        """Add a non-looping analytics source to the shared pipeline."""
         state = self._states[channel_id]
-        source = state.source
-        file_uri = f"file://{os.path.abspath(source)}"
 
-        best_photo = BestPhotoTracker()
-        state.best_photo = best_photo
-
-        # Reporter without ROI/lines (preview mode)
-        reporter = TrackingReporter(
-            self._labels,
-            roi_polygon=None,
-            lines=None,
-            best_photo=best_photo,
-            channel_id=channel_id,
-        )
-        state.reporter = reporter
-
-        # Frame callback bridged to asyncio
-        def on_frame(result):
-            self._safe_callback(self._frame_callback, result)
-
-        mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
-        state.mjpeg_extractor = mjpeg_extractor
-        frame_extractor = FrameExtractor(best_photo)
-
-        pipeline = Pipeline(f"preview-ch{channel_id}")
-        flow = Flow(pipeline, [file_uri])
-
-        # Source → mux → infer
-        infer_flow = flow.batch_capture(
-            [file_uri]
-        ).infer(PGIE_CONFIG, interval=self._inference_interval)
-        infer_element_name = infer_flow._streams[0]
-
-        # Enable file looping on the source element for preview.
-        # nvurisrcbin supports file-loop natively.
-        try:
-            src = pipeline["batch_capture-source-0_0"]
-            src.set({"file-loop": True})
-        except Exception as e:
-            logger.warning("Could not set file-loop: %s", e)
-
-        reporter.infer_node = pipeline[infer_element_name]
-
-        # infer → nvtracker
-        tracker_name = f"tracker_ch{channel_id}"
-        pipeline.add("nvtracker", tracker_name, {
-            "tracker-width": 640,
-            "tracker-height": 384,
-            "gpu-id": 0,
-            "ll-lib-file": TRACKER_LIB,
-            "ll-config-file": TRACKER_CONFIG,
-        })
-        pipeline.link(infer_element_name, tracker_name)
-        pipeline.attach(tracker_name, Probe(f"reporter_ch{channel_id}", reporter))
-
-        # tracker → tee → [OSD + MJPEG branch] + [RGB + snapshot branch]
-        tee_name = f"tee_ch{channel_id}"
-        pipeline.add("tee", tee_name, {})
-        pipeline.link(tracker_name, tee_name)
-
-        # Branch 1: OSD → MJPEG
-        osd_queue = f"osd_queue_ch{channel_id}"
-        osd_name = f"osd_ch{channel_id}"
-        osd_conv = f"osd_conv_ch{channel_id}"
-        osd_caps = f"osd_caps_ch{channel_id}"
-        osd_sink = f"osd_sink_ch{channel_id}"
-        pipeline.add("queue", osd_queue, {})
-        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
-        pipeline.add("nvvideoconvert", osd_conv, {})
-        pipeline.add("capsfilter", osd_caps, {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
-        pipeline.add("fakesink", osd_sink, {"sync": True})
-        pipeline.link(tee_name, osd_queue, osd_name, osd_conv, osd_caps, osd_sink)
-        pipeline.attach(osd_caps, Probe(f"mjpeg_ch{channel_id}", mjpeg_extractor))
-
-        # Branch 2: RGB for best-photo
-        snap_queue = f"snap_queue_ch{channel_id}"
-        snap_conv = f"snap_conv_ch{channel_id}"
-        snap_caps = f"snap_caps_ch{channel_id}"
-        snap_sink = f"snap_sink_ch{channel_id}"
-        pipeline.add("queue", snap_queue, {})
-        pipeline.add("nvvideoconvert", snap_conv, {})
-        pipeline.add("capsfilter", snap_caps, {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
-        pipeline.add("fakesink", snap_sink, {"sync": False})
-        pipeline.link(tee_name, snap_queue, snap_conv, snap_caps, snap_sink)
-        pipeline.attach(snap_caps, Probe(f"extractor_ch{channel_id}", frame_extractor))
-
-        state.pipeline = pipeline
-        pipeline.start()
-        logger.info("Preview pipeline started for channel %d", channel_id)
-
-    def _start_analytics_pipeline(self, channel_id: int) -> None:
-        """Build and start an analytics pipeline (plays once, with ROI/lines)."""
-        state = self._states[channel_id]
-        source = state.source
-        file_uri = f"file://{os.path.abspath(source)}"
-
-        best_photo = BestPhotoTracker()
-        state.best_photo = best_photo
-
-        # Convert entry_exit_lines dict format to LineSeg objects
         from backend.pipeline.direction import LineSeg
         lines = {}
         if state.entry_exit_lines:
@@ -540,163 +516,53 @@ class DeepStreamPipeline:
                     end=tuple(line_data["end"]),
                 )
 
-        # Alert callback bridged to asyncio
         def on_alert(alert):
             self._safe_callback(self._alert_callback, alert)
 
         def on_track_ended(track):
             self._safe_callback(self._track_ended_callback, track)
 
-        reporter = TrackingReporter(
-            self._labels,
+        def on_eos(source_id):
+            self._safe_callback(self._on_source_eos, channel_id)
+
+        self._ensure_shared_pipeline()
+        self._add_channel_to_pipeline(
+            channel_id,
+            file_loop=False,
             roi_polygon=state.roi_polygon,
             lines=lines if lines else None,
-            best_photo=best_photo,
-            channel_id=channel_id,
             alert_callback=on_alert,
             track_ended_callback=on_track_ended,
+            eos_callback=on_eos,
         )
-        state.reporter = reporter
 
-        # Frame callback bridged to asyncio
-        def on_frame(result):
-            self._safe_callback(self._frame_callback, result)
-
-        mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
-        state.mjpeg_extractor = mjpeg_extractor
-        frame_extractor = FrameExtractor(best_photo)
-
-        pipeline = Pipeline(f"analytics-ch{channel_id}")
-        flow = Flow(pipeline, [file_uri])
-
-        # Source → mux → infer (single play, no loop)
-        infer_flow = flow.batch_capture([file_uri]).infer(
-            PGIE_CONFIG, interval=self._inference_interval
-        )
-        infer_element_name = infer_flow._streams[0]
-
-        reporter.infer_node = pipeline[infer_element_name]
-
-        # infer → nvtracker
-        tracker_name = f"tracker_ch{channel_id}"
-        pipeline.add("nvtracker", tracker_name, {
-            "tracker-width": 640,
-            "tracker-height": 384,
-            "gpu-id": 0,
-            "ll-lib-file": TRACKER_LIB,
-            "ll-config-file": TRACKER_CONFIG,
-        })
-        pipeline.link(infer_element_name, tracker_name)
-        pipeline.attach(tracker_name, Probe(f"reporter_ch{channel_id}", reporter))
-
-        # tracker → tee → [OSD + MJPEG] + [RGB + snapshot]
-        tee_name = f"tee_ch{channel_id}"
-        pipeline.add("tee", tee_name, {})
-        pipeline.link(tracker_name, tee_name)
-
-        # Branch 1: OSD → MJPEG
-        osd_queue = f"osd_queue_ch{channel_id}"
-        osd_name = f"osd_ch{channel_id}"
-        osd_conv = f"osd_conv_ch{channel_id}"
-        osd_caps = f"osd_caps_ch{channel_id}"
-        osd_sink = f"osd_sink_ch{channel_id}"
-        pipeline.add("queue", osd_queue, {})
-        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
-        pipeline.add("nvvideoconvert", osd_conv, {})
-        pipeline.add("capsfilter", osd_caps, {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
-        pipeline.add("fakesink", osd_sink, {"sync": True})
-        pipeline.link(tee_name, osd_queue, osd_name, osd_conv, osd_caps, osd_sink)
-        pipeline.attach(osd_caps, Probe(f"mjpeg_ch{channel_id}", mjpeg_extractor))
-
-        # Branch 2: RGB for best-photo
-        snap_queue = f"snap_queue_ch{channel_id}"
-        snap_conv = f"snap_conv_ch{channel_id}"
-        snap_caps = f"snap_caps_ch{channel_id}"
-        snap_sink = f"snap_sink_ch{channel_id}"
-        pipeline.add("queue", snap_queue, {})
-        pipeline.add("nvvideoconvert", snap_conv, {})
-        pipeline.add("capsfilter", snap_caps, {
-            "caps": "video/x-raw(memory:NVMM),format=RGB",
-        })
-        pipeline.add("fakesink", snap_sink, {"sync": False})
-        pipeline.link(tee_name, snap_queue, snap_conv, snap_caps, snap_sink)
-        pipeline.attach(snap_caps, Probe(f"extractor_ch{channel_id}", frame_extractor))
-
-        state.pipeline = pipeline
-
-        # EOS handler: auto-transition to Review via start_with_callback
-        def on_message(message):
-            if "EOS" in str(message) or "eos" in str(message):
-                logger.info("Analytics EOS on channel %d", channel_id)
-                self._safe_callback(self._on_eos, channel_id)
-
-        pipeline._instance.start_with_callback(on_message)
-        logger.info("Analytics pipeline started for channel %d", channel_id)
-
-    def _on_eos(self, channel_id: int) -> None:
-        """Handle end-of-stream — auto-transition to Review."""
+    def _on_source_eos(self, channel_id: int) -> None:
+        """Handle per-source EOS — auto-transition to Review."""
         if channel_id not in self._states:
             return
         state = self._states[channel_id]
-        if state.phase == ChannelPhase.ANALYTICS:
-            previous = state.phase
-            self._stop_channel_pipeline(channel_id)
-            state.phase = ChannelPhase.REVIEW
-            logger.info("Channel %d auto-transitioned to REVIEW (EOS)", channel_id)
-            self._safe_callback(
-                self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
-            )
-
-    def _stop_channel_pipeline(self, channel_id: int) -> None:
-        """Stop the running pipeline for a channel."""
-        state = self._states.get(channel_id)
-        if state is None or state.pipeline is None:
+        if state.phase != ChannelPhase.ANALYTICS:
             return
+        previous = state.phase
+        self._soft_remove_source(channel_id)
+        state.phase = ChannelPhase.REVIEW
+        logger.info("Channel %d auto-transitioned to REVIEW (source EOS)", channel_id)
+        self._safe_callback(
+            self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
+        )
 
-        # Finalize remaining stitcher tracks
-        if state.reporter:
-            for tid, sstate in list(state.reporter.stitcher.lost_tracks.items()):
-                state.reporter._finalize_lost_track(tid, sstate)
-            state.reporter.stitcher.lost_tracks.clear()
+    def _on_pipeline_message(self, message) -> None:
+        """Handle pipeline-level messages (EOS fallback)."""
+        msg_str = str(message).lower()
+        if "eos" in msg_str:
+            logger.info("Pipeline-level EOS received")
+            if self._batch_router is not None:
+                self._safe_callback(
+                    lambda: self._batch_router.fire_all_pending_eos()
+                )
 
-            # Save remaining active track photos (using sequential IDs)
-            if state.best_photo:
-                for tid in list(state.reporter.active_tracks):
-                    seq_tid = state.reporter._seq_id(tid)
-                    state.best_photo.save(seq_tid, state.reporter.snapshot_dir)
+    # -- Legacy methods removed in M5-P2 --
+    # _start_preview_pipeline, _start_analytics_pipeline, _stop_channel_pipeline
+    # replaced by shared pipeline: _add_channel_to_pipeline, _add_analytics_source,
+    # _soft_remove_source
 
-        # Disable MJPEG callback before deferred stop to prevent
-        # the old pipeline from interleaving frames with the new one
-        if state.mjpeg_extractor:
-            state.mjpeg_extractor._callback = None
-            state.mjpeg_extractor = None
-
-        pipeline = state.pipeline
-        state.pipeline = None
-        state.reporter = None
-
-        # pyservicemaker's pipeline.stop() triggers C++ terminate() when
-        # called while an asyncio event loop is running (GLib main loop
-        # conflict). Workaround: disable file-loop so the pipeline will
-        # naturally reach EOS, then call stop() from a background thread
-        # after EOS arrives. The pipeline object is released immediately
-        # so the adapter can build a new pipeline for the next phase.
-        import threading as _threading
-
-        try:
-            src = pipeline["batch_capture-source-0_0"]
-            src.set({"file-loop": False})
-        except Exception:
-            pass
-
-        def _deferred_stop():
-            try:
-                pipeline.wait()  # blocks until EOS
-                pipeline.stop()
-            except Exception:
-                pass
-
-        _threading.Thread(target=_deferred_stop, daemon=True).start()
-        logger.debug("Pipeline stop initiated for channel %d", channel_id)
