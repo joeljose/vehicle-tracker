@@ -260,10 +260,14 @@ The system accepts two source types: local file paths and YouTube Live URLs. Fil
 Operator pastes YouTube URL in UI
     → POST /channel/add { "source": "https://youtube.com/watch?v=..." }
     → Backend detects YouTube URL pattern
-    → yt-dlp extracts available stream formats and best HLS URL
-    → Available qualities returned to frontend for UI dropdown
+    → Returns 202 Accepted immediately (channel not yet created)
+    → Background task: yt-dlp extracts best HLS URL
+    → Success: channel created, WS notification sent to frontend
+    → Failure: WS error notification with reason, no channel created
     → Resolved HLS URL passed to pipeline (nvurisrcbin handles HLS natively)
 ```
+
+**Async resolution:** YouTube URL resolution via `yt-dlp` takes 10-30 seconds (deno JS extraction). To avoid blocking the API, resolution runs as a background task. The channel is only created after successful resolution — there is no "resolving" state in the channel lifecycle. If resolution fails (invalid URL, private stream, geo-blocked, stream offline), a WebSocket error event is sent and the operator can retry with a different URL.
 
 **Source resolver module:**
 ```python
@@ -275,14 +279,13 @@ class ResolvedSource:
     source_type: Literal["file", "youtube_live"]
     stream_url: str                    # file path or resolved HLS URL
     original_url: str                  # what the user provided
-    qualities: list[dict] | None       # available qualities (YouTube only)
-    selected_quality: str | None       # e.g. "1080p", "720p"
 
-def resolve_source(source: str, preferred_quality: str | None = None) -> ResolvedSource:
+def resolve_source(source: str) -> ResolvedSource:
     """Resolve a user-provided source to a pipeline-consumable URL.
 
     For file paths: validates the file exists, returns as-is.
-    For YouTube URLs: extracts HLS URL via yt-dlp, returns resolved URL + quality options.
+    For YouTube URLs: extracts best-quality HLS URL via yt-dlp.
+    Always resolves to best available quality — no quality selection.
     """
     ...
 
@@ -291,65 +294,74 @@ def check_stream_liveness(original_url: str) -> bool:
     Used during stream recovery to distinguish 'stream ended' from 'network issue'."""
     ...
 
-def re_extract_url(original_url: str, preferred_quality: str | None = None) -> str:
+def re_extract_url(original_url: str) -> str:
     """Re-extract a fresh HLS URL from a YouTube Live URL.
     Used during stream recovery when the existing HLS URL has expired."""
     ...
 ```
+
+**yt-dlp call serialization:** All `yt-dlp` subprocess calls (initial resolution and recovery) are serialized through a single `asyncio.Lock`. Only one `yt-dlp` process runs at a time. This prevents concurrent calls from triggering YouTube rate limiting, which would make recovery worse. With a 2-3 channel target, contention is rare; when it occurs (e.g., network blip causing simultaneous recovery), queuing adds a few seconds — acceptable for background operations.
 
 **Stream recovery strategy** (implemented in the source manager, invoked when the pipeline detects a stream interruption):
 
 1. **Retry existing HLS URL** — 3 attempts with backoff (5s, 10s, 20s). Most interruptions are transient network issues; the HLS URL is still valid.
 2. **Check liveness** — If retries fail, call `check_stream_liveness()` via `yt-dlp --dump-json`.
    - **Stream ended:** Transition channel to Phase 3 automatically.
-   - **Stream still live:** The HLS URL may have expired. Call `re_extract_url()` to get a fresh one.
-3. **Re-extract and reconnect** — If re-extraction succeeds, reconnect the pipeline with the new URL.
-4. **Give up** — If re-extraction also fails, surface the error to the operator via a `pipeline_event` WebSocket message. Operator can manually retry or remove the channel.
+   - **Stream still live:** The HLS URL may have expired. Proceed to re-extraction.
+3. **Validate and reconnect** — Call `re_extract_url()` to get a fresh HLS URL. Validate the new URL (HEAD request or equivalent) before triggering a shared pipeline rebuild. This avoids tearing down other channels' streams for a URL that will immediately fail again.
+4. **Give up** — If re-extraction or validation fails, surface the error to the operator via a `pipeline_event` WebSocket message. Operator can manually retry or remove the channel.
 
-**Quality selection:**
-- Default: best available quality (highest resolution).
-- `POST /channel/add` response includes `qualities` list for the frontend to populate a dropdown.
-- `PATCH /channel/{id}/quality` allows the operator to switch quality at runtime (triggers URL re-extraction at the new quality and pipeline source swap).
+**Circuit breaker:** If the same channel triggers 3 pipeline rebuilds within 10 minutes, it is automatically ejected (transitioned to error state and removed from the shared pipeline). The operator is notified via WebSocket. This prevents one flaky stream from repeatedly disrupting all channels in the shared pipeline.
+
+**Stream interruption detection:** Two mechanisms:
+- **GStreamer error messages** from `nvurisrcbin` on HLS failure (404, timeout, connection reset).
+- **Frame-gap watchdog** (from M5) as a fallback — if no new frames arrive for a channel within N seconds, treat it as a stream interruption. This catches silent freezes where `nvurisrcbin` does not emit an error.
+
+**Note:** The exact GStreamer messages emitted by `nvurisrcbin` on HLS failure must be validated experimentally before implementation (see validation spike below).
+
+**Last frame buffer for Phase 3 replay:** The MJPEG encoder already produces a JPEG for every frame. A single `last_frame` reference per channel is kept in memory (overwritten each frame, near-zero cost). At Phase 2→3 transition — whether from clean stream end or stream death — this buffer is persisted to disk as the frozen review frame for canvas-based bbox replay.
 
 **yt-dlp invocation for URL resolution:**
 ```python
-# Extract stream info (formats, HLS URL, liveness)
+# Extract best HLS URL
+result = subprocess.run(
+    ["yt-dlp", "-f", "bv*+ba/b", "--get-url", youtube_url],
+    capture_output=True, text=True, timeout=30
+)
+hls_url = result.stdout.strip()
+
+# Check liveness (used during recovery)
 result = subprocess.run(
     ["yt-dlp", "--dump-json", "--no-download", youtube_url],
     capture_output=True, text=True, timeout=30
 )
 info = json.loads(result.stdout)
-# info["is_live"] → True if stream is live
-# info["formats"] → list of available formats with "url" fields
-# Filter for HLS formats: format["protocol"] == "m3u8_native"
-
-# Extract direct HLS URL at a specific quality
-result = subprocess.run(
-    ["yt-dlp", "-f", f"bv*[height<={height}]", "--get-url", youtube_url],
-    capture_output=True, text=True, timeout=30
-)
-hls_url = result.stdout.strip()
+# info["is_live"] → True if stream is still broadcasting
 ```
 
 **Critical yt-dlp flags** (learned from production use in youtube-downloader project):
 - `--no-live-from-start` — Do NOT use `--live-from-start`. Old HLS fragments get purged by YouTube causing 404/500 errors.
 - `--hls-use-mpegts` — Required for HLS stream compatibility.
 - `--wait-for-video 5` — Robustness for streams that haven't fully started.
-- Format selection: `bv*[height<=N]+ba/b[height<=N]` for quality presets, `bv*+ba/b` for best.
+- Format selection: `bv*+ba/b` for best quality (always).
 
 **Note:** These flags apply when yt-dlp is used as a downloader. For URL resolution (`--dump-json`, `--get-url`), only the format filter (`-f`) is needed. The HLS URL returned by `--get-url` is fed directly to DeepStream's `nvurisrcbin`, which handles HLS consumption natively.
 
 **Dependencies:**
-- `yt-dlp` binary installed in the Docker container (pinned version in Dockerfile).
-- `deno` runtime installed in the Docker container — **required by yt-dlp for YouTube JavaScript extraction**. Without deno, many streams fail or return limited formats.
+- `yt-dlp` precompiled binary downloaded in the Dockerfile (latest release from GitHub, same approach as youtube-downloader project).
+- `deno` precompiled binary downloaded in the Dockerfile — **required by yt-dlp for YouTube JavaScript extraction**. Without deno, many streams fail or return limited formats. Made available on PATH so yt-dlp finds it automatically.
 - `ffmpeg` available in the container (already present in the DeepStream base image).
-- Called as a subprocess (`subprocess.run(["yt-dlp", ...])`) — not as a Python library — for isolation and easy version pinning.
+- Called as a subprocess (`subprocess.run(["yt-dlp", ...])`) — not as a Python library — for isolation and easy version updates.
 
 **Key constraints:**
 - YouTube HLS URLs expire after ~6 hours. Sessions are expected to be ~1 hour max, so expiry is unlikely but handled via re-extraction.
-- `yt-dlp` is an external tool that requires periodic updates as YouTube changes its API. The version is pinned in the Dockerfile.
-- `deno` is similarly pinned — needed for yt-dlp's YouTube extractor to run JavaScript from YouTube's player.
-- Resolution adds 2-5 seconds latency at channel add time (one-time cost).
+- `yt-dlp` requires periodic updates as YouTube changes its API. Use latest release in Dockerfile; rebuild image when streams start failing.
+- `deno` is similarly updated — needed for yt-dlp's YouTube extractor to run JavaScript from YouTube's player.
+
+**Validation spike (must complete before implementation):**
+1. Can `nvurisrcbin` consume a YouTube HLS URL resolved by `yt-dlp`?
+2. What GStreamer bus messages does `nvurisrcbin` emit on HLS stream failure (404, timeout, silent freeze)?
+3. Does the M5 frame-gap watchdog reliably detect HLS stream drops as a fallback?
 
 ---
 
@@ -1392,11 +1404,10 @@ Each junction has a saved configuration file. Loaded when the same site is added
 | POST | `/pipeline/start` | — | `{"status": "started"}` | Boots the inference pipeline |
 | POST | `/pipeline/stop` | — | `{"status": "stopped"}` | Stops all inference |
 | GET | `/channels` | — | `{"channels": [...], "pipeline_started": true}` | List all channels with phase, alert count. Used by home page on load. |
-| POST | `/channel/add` | `{"source": "https://youtube.com/watch?v=..." \| "/path/file.mp4"}` | `{"channel_id": 0, "qualities": [...]}` | Adds source, resolves YouTube URL if needed, enters Phase 1 |
+| POST | `/channel/add` | `{"source": "https://youtube.com/watch?v=..." \| "/path/file.mp4"}` | File: `{"channel_id": 0}`. YouTube: `{"status": "resolving", "request_id": "..."}` (202) | Adds source. File sources enter Phase 1 immediately. YouTube URLs resolve asynchronously — channel created on success via WS notification, error sent on failure. |
 | POST | `/channel/remove` | `{"channel_id": 0}` | `{"status": "removed"}` | Phase 4 teardown, clears extracted clips |
 | POST | `/channel/{id}/phase` | `{"phase": "setup" \| "analytics" \| "review"}` | `{"status": "ok", "phase": "analytics"}` | Transition channel phase. Emits `phase_changed` WS event. Analytics→Review triggers background clip extraction. |
 | PATCH | `/config` | `{"confidence_threshold": 0.5}` | `{"status": "updated"}` | Runtime config update |
-| PATCH | `/channel/{id}/quality` | `{"quality": "720p"}` | `{"status": "updated"}` | Change YouTube stream quality (triggers URL re-extraction) |
 
 ### Video
 
@@ -1893,6 +1904,6 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load, WebSocket integration. 286 tests. **COMPLETE (v0.3.0).** |
 | **M4** | DeepStream-FastAPI integration | DeepStreamPipeline adapter (PipelineBackend Protocol), per-channel pipeline lifecycle, MjpegExtractor for GPU->JPEG, real-time alerts, clip extraction for replay, EOS auto-transition. 312 tests. **COMPLETE (v0.4.0).** |
 | **M5** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
-| **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic |
+| **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, stream recovery logic (circuit breaker, serialized yt-dlp calls), last-frame buffer for Phase 3 replay |
 | **M7** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
 | **M8** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |

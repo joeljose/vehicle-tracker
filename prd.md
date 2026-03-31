@@ -121,7 +121,7 @@ Each channel independently progresses through four phases. Multiple channels can
 | F-02 | System accepts local video files (mp4, mkv, avi) as input sources | Must |
 | F-03 | Architecture supports N simultaneous channels -- the channel limit is a runtime config value, not a structural constraint | Must |
 | F-04 | YouTube Live stream recovery: on stream interruption, retry the existing HLS URL up to 3 times (5s, 10s, 20s backoff). If retries fail, check if the stream is still live via `yt-dlp`. If the stream ended, move to Phase 3 automatically. If the stream is still live but the URL is stale, re-extract the URL once and reconnect. If still failing, surface the error to the operator. | Must |
-| F-04a | Stream quality selection: best available quality by default. Operator can change quality from the UI per channel. Quality options are fetched from `yt-dlp` at channel add time. | Must |
+| F-04a | ~~Stream quality selection~~ **Removed.** Always resolves to best available quality. No runtime quality switching. | — |
 | F-05 | File sources play once during Phase 2 (analytics); loop during Phase 1 (setup preview) | Must |
 | F-06 | Channels can be added or removed at runtime via the UI without restarting the pipeline | Must |
 | F-07 | Each channel progresses through phases independently -- one channel in Setup while another is in Analytics | Must |
@@ -553,7 +553,7 @@ duration_ms, frames_stationary
 | M3 -- React UI | React frontend with 4-phase workflow (Setup/Analytics/Review/Teardown), MJPEG video panel, ROI polygon and entry/exit line drawing tools on canvas overlay, alert feed sidebar with filter tabs, stats bar (FPS/tracks/inference), site config save/load, WebSocket integration, phase controls. 286 tests. **COMPLETE (v0.3.0).** | M2 |
 | M4 -- DeepStream-FastAPI integration | DeepStreamPipeline adapter class implementing PipelineBackend Protocol. Per-channel pipeline lifecycle (preview -> analytics -> review). MjpegExtractor BufferOperator for GPU->JPEG at ~15fps. Real-time alert delivery via callbacks. Clip extraction with ffmpeg for replay. EOS auto-transition with phase callback. 312 tests. **COMPLETE (v0.4.0).** | M3 |
 | M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. | M4 |
-| M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp`, HLS stream consumption, quality selection, stream recovery logic. Tested on live YouTube traffic camera feeds. | M5 |
+| M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp` (async, best quality only), HLS stream consumption, stream recovery with circuit breaker, serialized `yt-dlp` calls, last-frame buffer for Phase 3 frozen-frame replay. Tested on live YouTube traffic camera feeds. | M5 |
 | M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
 | M8 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M6 |
 
