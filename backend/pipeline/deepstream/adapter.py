@@ -51,9 +51,9 @@ class MjpegExtractor(BufferOperator):
             import cupy as cp
             import cv2
 
-            # Extract best-photo crops on every frame (not rate-limited)
-            # so pending crops from BestPhotoTracker.score() are captured
-            # promptly. This replaces the legacy FrameExtractor branch.
+            # Extract best-photo crops on every frame (not rate-limited).
+            # Runs post-OSD so crops include annotations — acceptable until
+            # pyservicemaker supports tee without stalling BufferOperator.
             best_photo = self._reporter.best_photo
             if best_photo and best_photo.pending_crops:
                 for batch_id in range(buffer.batch_size):
@@ -486,11 +486,18 @@ class DeepStreamPipeline:
 
         # Create demux output branch BEFORE source — nvstreamdemux can't
         # allocate request pads while data is already flowing through it.
+        #
+        # Single chain (tee stalls with pyservicemaker's BufferOperator):
+        # demux → queue → conv_pre(RGBA) → caps_pre(RGBA) [FrameExtractor: clean crops]
+        #       → OSD → conv_post(RGB) → caps_post(RGB) [MjpegExtractor: annotated MJPEG]
+        #       → fakesink
         q_name = f"q_{src_idx}"
         osd_name = f"osd_{src_idx}"
         conv_name = f"conv_{src_idx}"
         caps_name = f"caps_{src_idx}"
         sink_name = f"sink_{src_idx}"
+        # Add all elements first, then link (pyservicemaker requires
+        # elements to exist before linking)
         pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
         pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
         pipeline.add("nvvideoconvert", conv_name, {})
@@ -498,8 +505,12 @@ class DeepStreamPipeline:
             "caps": "video/x-raw(memory:NVMM),format=RGB",
         })
         pipeline.add("fakesink", sink_name, {"sync": True})
+
         pipeline.link(("demux", q_name), ("src_%u", ""))
-        pipeline.link(q_name, osd_name, conv_name, caps_name, sink_name)
+        pipeline.link(q_name, osd_name)
+
+        # Post-OSD → RGB for annotated MJPEG
+        pipeline.link(osd_name, conv_name, caps_name, sink_name)
         pipeline.attach(caps_name, Probe(f"mjpeg_{src_idx}", mjpeg_extractor))
 
         # Add source to mux AFTER demux branch is ready
