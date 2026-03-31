@@ -15,6 +15,8 @@ import { createWs } from "../api/ws";
 export default function Home() {
   const { state, dispatch } = useHome();
   const toast = useToast();
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
   const [source, setSource] = useState("");
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(null);
@@ -43,6 +45,8 @@ export default function Home() {
         "phase_changed",
         "transit_alert",
         "stagnant_alert",
+        "channel_added",
+        "resolution_failed",
       ],
     });
 
@@ -52,6 +56,25 @@ export default function Home() {
       } else if (msg.event === "stopped") {
         dispatch({ type: "PIPELINE_STOPPED" });
       }
+    });
+
+    ws.on("channel_added", (msg) => {
+      dispatch({
+        type: "ADD_CHANNEL",
+        channel: {
+          channel_id: msg.channel,
+          source: msg.source,
+          phase: "setup",
+          alert_count: 0,
+          source_type: msg.source_type,
+        },
+      });
+      toastRef.current("YouTube stream connected");
+      window.open(`/channel/${msg.channel}`, `channel-${msg.channel}`);
+    });
+
+    ws.on("resolution_failed", (msg) => {
+      toastRef.current(msg.error || "Stream resolution failed", "error");
     });
 
     ws.on("phase_changed", (msg) => {
@@ -107,18 +130,25 @@ export default function Home() {
     if (!source.trim()) return;
     try {
       const data = await addChannel(source.trim());
-      dispatch({
-        type: "ADD_CHANNEL",
-        channel: {
-          channel_id: data.channel_id,
-          source: source.trim(),
-          phase: "setup",
-          alert_count: 0,
-        },
-      });
-      window.open(`/channel/${data.channel_id}`, `channel-${data.channel_id}`);
-      setSource("");
-      toast("Channel added");
+      if (data.resolving) {
+        // YouTube URL — resolving asynchronously, WS will notify when done
+        setSource("");
+        toast("Resolving stream...");
+      } else {
+        // File source — added synchronously
+        dispatch({
+          type: "ADD_CHANNEL",
+          channel: {
+            channel_id: data.channel_id,
+            source: source.trim(),
+            phase: "setup",
+            alert_count: 0,
+          },
+        });
+        window.open(`/channel/${data.channel_id}`, `channel-${data.channel_id}`);
+        setSource("");
+        toast("Channel added");
+      }
     } catch (e) {
       toast(e.message, "error");
     }

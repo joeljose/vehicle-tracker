@@ -49,6 +49,12 @@ export default function ChannelCard({ channel, onRemove }) {
             )}
             {channel.phase.charAt(0).toUpperCase() + channel.phase.slice(1)}
           </span>
+          {channel.source_type === "youtube_live" && (
+            <span className="px-2 py-0.5 bg-error-red/10 text-error-red text-xs rounded-full font-medium flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-error-red animate-pulse" />
+              Live
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
