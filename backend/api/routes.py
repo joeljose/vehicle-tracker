@@ -348,6 +348,17 @@ def get_replay(
     return FileResponse(clip_path, media_type="video/mp4")
 
 
+@router.get("/channel/{channel_id}/last_frame")
+def get_last_frame(channel_id: int):
+    """Return the last captured frame for a channel (Phase 3 frozen-frame replay)."""
+    from pathlib import Path
+
+    frame_path = Path("snapshots") / str(channel_id) / "last_frame.jpg"
+    if not frame_path.exists():
+        raise HTTPException(status_code=404, detail="Last frame not found")
+    return FileResponse(frame_path, media_type="image/jpeg")
+
+
 @router.get("/snapshot/{track_id}")
 def get_snapshot(
     track_id: str,

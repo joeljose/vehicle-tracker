@@ -33,12 +33,17 @@ export async function getChannel(channelId) {
 }
 
 export async function addChannel(source) {
-  return (
-    await request("/channel/add", {
-      method: "POST",
-      body: JSON.stringify({ source }),
-    })
-  ).json();
+  const resp = await request("/channel/add", {
+    method: "POST",
+    body: JSON.stringify({ source }),
+  });
+  const data = await resp.json();
+  // 202 = YouTube URL resolving asynchronously
+  if (resp.status === 202) {
+    return { resolving: true, request_id: data.request_id };
+  }
+  // 200 = file source added synchronously
+  return { resolving: false, channel_id: data.channel_id };
 }
 
 export async function removeChannel(channelId) {
@@ -92,6 +97,10 @@ export async function getAlert(alertId) {
 
 export function replayUrl(alertId) {
   return `/api/alert/${alertId}/replay`;
+}
+
+export function lastFrameUrl(channelId) {
+  return `/api/channel/${channelId}/last_frame`;
 }
 
 export async function getReplayStatus(alertId) {
