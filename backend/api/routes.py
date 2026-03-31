@@ -244,8 +244,20 @@ def set_channel_phase(
                 )
             entry_exit = {}
             if body.entry_exit_lines:
+                # Check for duplicate labels across different keys
+                labels = [v.label for v in body.entry_exit_lines.values()]
+                if len(labels) != len(set(labels)):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Duplicate entry/exit line labels are not allowed",
+                    )
                 entry_exit = {
-                    k: {"label": v.label, "start": list(v.start), "end": list(v.end)}
+                    k: {
+                        "label": v.label,
+                        "start": list(v.start),
+                        "end": list(v.end),
+                        "junction_side": v.junction_side,
+                    }
                     for k, v in body.entry_exit_lines.items()
                 }
             backend.configure_channel(
@@ -379,7 +391,7 @@ def get_snapshot(
 @router.post("/site/config", response_model=StatusResponse)
 def save_site(body: SiteConfigRequest):
     entry_exit = {
-        k: {"label": v.label, "start": list(v.start), "end": list(v.end)}
+        k: {"label": v.label, "start": list(v.start), "end": list(v.end), "junction_side": v.junction_side}
         for k, v in body.entry_exit_lines.items()
     }
     config = SiteConfig(
@@ -387,7 +399,10 @@ def save_site(body: SiteConfigRequest):
         roi_polygon=list(body.roi_polygon),
         entry_exit_lines=entry_exit,
     )
-    site_config_mod.save_site_config(config, site_config_mod.SITES_DIR)
+    try:
+        site_config_mod.save_site_config(config, site_config_mod.SITES_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     return StatusResponse(status="saved")
 
 
@@ -395,6 +410,8 @@ def save_site(body: SiteConfigRequest):
 def load_site(site_id: str = Query()):
     try:
         config = site_config_mod.load_site_config(site_id, site_config_mod.SITES_DIR)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Site config not found")
     return {

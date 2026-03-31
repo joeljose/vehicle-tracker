@@ -148,6 +148,7 @@ function ChannelContent() {
             label: l.label,
             start: { x: l.start[0], y: l.start[1] },
             end: { x: l.end[0], y: l.end[1] },
+            junction_side: l.junction_side || "left",
           }));
           setLines(restored);
         }
@@ -244,7 +245,7 @@ function ChannelContent() {
 
   const handleLabelConfirm = useCallback((label) => {
     if (!labelInput) return;
-    setLines((prev) => [...prev, { label, start: labelInput.start, end: labelInput.end }]);
+    setLines((prev) => [...prev, { label, start: labelInput.start, end: labelInput.end, junction_side: "left" }]);
     setLabelInput(null);
   }, [labelInput]);
 
@@ -254,6 +255,16 @@ function ChannelContent() {
 
   const handleClearRoi = useCallback(() => {
     setRoi([]);
+  }, []);
+
+  const handleFlipJunctionSide = useCallback((index) => {
+    setLines((prev) =>
+      prev.map((line, i) =>
+        i === index
+          ? { ...line, junction_side: line.junction_side === "left" ? "right" : "left" }
+          : line
+      )
+    );
   }, []);
 
   const handleClearLine = useCallback((index) => {
@@ -292,6 +303,7 @@ function ChannelContent() {
           label: line.label,
           start: [line.start.x, line.start.y],
           end: [line.end.x, line.end.y],
+          junction_side: line.junction_side || "left",
         };
       }
       await setChannelPhase(channelId, "analytics", {
@@ -435,6 +447,7 @@ function ChannelContent() {
             pendingPoints={pendingPoints}
             onClearRoi={handleClearRoi}
             onClearLine={handleClearLine}
+            onFlipJunctionSide={handleFlipJunctionSide}
             onClearAll={handleClearAll}
             onUndo={handleUndo}
             onStartAnalytics={handleStartAnalytics}

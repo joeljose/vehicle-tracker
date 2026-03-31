@@ -1,4 +1,13 @@
-"""Line-crossing detection, auto-calibration, and direction state machine."""
+"""Line-crossing detection and direction state machine.
+
+Entry/exit polarity is determined by the user during Setup phase via
+the junction_side field ("left" or "right"). The cross-product of the
+line vector (start→end) with a point tells us which side the point is
+on: positive = left side, negative = right side. The junction_side
+field specifies which side is "inside" the junction. A vehicle crossing
+from the junction side to the outside is "exiting"; outside to junction
+side is "entering".
+"""
 
 import math
 from dataclasses import dataclass
@@ -7,11 +16,12 @@ from enum import Enum
 
 @dataclass
 class LineSeg:
-    """A labeled entry/exit line segment."""
+    """A labeled entry/exit line segment with junction side polarity."""
 
     label: str
     start: tuple[float, float]
     end: tuple[float, float]
+    junction_side: str = "left"  # "left" or "right" of start→end vector
 
 
 def cross_product_sign(line: LineSeg, point: tuple[float, float]) -> float:
@@ -33,9 +43,6 @@ def check_line_crossing(
         +1 if crossed from negative to positive side,
         -1 if crossed from positive to negative side,
         None if no crossing.
-
-    The raw sign is returned because entry/exit meaning depends on
-    calibration (line drawing direction is arbitrary).
     """
     cross_prev = cross_product_sign(line, prev_centroid)
     cross_curr = cross_product_sign(line, curr_centroid)
@@ -45,61 +52,30 @@ def check_line_crossing(
     return None
 
 
-class LineCalibration:
-    """Auto-calibrates entry/exit polarity for a single line.
+def classify_crossing(line: LineSeg, crossing_direction: int) -> str:
+    """Classify a crossing as 'entry' or 'exit' using user-specified junction side.
 
-    Observes the first N crossings and uses the ROI centroid to determine
-    which cross-product sign corresponds to "entry" (approaching from outside
-    the junction) vs "exit" (leaving toward outside).
+    Convention:
+        - Cross product positive = left side of start→end vector
+        - Cross product negative = right side of start→end vector
+        - junction_side tells us which side is "inside" the junction
+        - Crossing from outside to inside = "entry"
+        - Crossing from inside to outside = "exit"
 
-    The heuristic: if the centroid that was *closer to the ROI center* is on the
-    positive side, then positive-to-negative = exit. But since we don't have
-    ROI center easily, we use a simpler approach: the operator is expected to
-    draw lines at junction borders. Vehicles entering the junction cross from
-    outside to inside. We record crossing directions and use majority vote
-    after observing `calibration_count` crossings.
+    crossing_direction +1 means the vehicle moved from negative to positive side.
+    crossing_direction -1 means the vehicle moved from positive to negative side.
     """
+    # Which cross-product sign corresponds to the junction (inside) side?
+    junction_sign_is_positive = line.junction_side == "left"
 
-    def __init__(self, line: LineSeg, calibration_count: int = 10):
-        self.line = line
-        self.calibration_count = calibration_count
-        self.observations: list[int] = []  # raw crossing directions (+1 or -1)
-        self.entry_sign: int | None = None  # once calibrated: which sign means "entry"
-        self._calibrated = False
-
-    @property
-    def calibrated(self) -> bool:
-        return self._calibrated
-
-    def observe(self, crossing_direction: int) -> None:
-        """Record a crossing observation for calibration."""
-        if self._calibrated:
-            return
-        self.observations.append(crossing_direction)
-        if len(self.observations) >= self.calibration_count:
-            self._calibrate()
-
-    def _calibrate(self) -> None:
-        """Majority vote: the more common direction is 'entry' (more vehicles enter than exit
-        in a typical observation window, or at worst it's 50/50 and we pick one)."""
-        pos_count = sum(1 for d in self.observations if d > 0)
-        neg_count = len(self.observations) - pos_count
-        # The more common crossing direction is assumed to be "entry"
-        # (in a busy junction, roughly equal, so either assignment works —
-        # the operator can override in config)
-        self.entry_sign = 1 if pos_count >= neg_count else -1
-        self._calibrated = True
-
-    def classify(self, crossing_direction: int) -> str | None:
-        """Classify a crossing as 'entry' or 'exit'. Returns None if not yet calibrated."""
-        if not self._calibrated:
-            return None
-        return "entry" if crossing_direction == self.entry_sign else "exit"
-
-    def force_calibrate(self, entry_sign: int) -> None:
-        """Manually set calibration (e.g., from saved config)."""
-        self.entry_sign = entry_sign
-        self._calibrated = True
+    if junction_sign_is_positive:
+        # Junction is on the positive (left) side
+        # +1 = moved from negative to positive = entering junction
+        return "entry" if crossing_direction == 1 else "exit"
+    else:
+        # Junction is on the negative (right) side
+        # -1 = moved from positive to negative = entering junction
+        return "entry" if crossing_direction == -1 else "exit"
 
 
 def load_lines_from_config(entry_exit_lines: dict) -> dict[str, LineSeg]:
@@ -110,6 +86,7 @@ def load_lines_from_config(entry_exit_lines: dict) -> dict[str, LineSeg]:
             label=line_data["label"],
             start=tuple(line_data["start"]),
             end=tuple(line_data["end"]),
+            junction_side=line_data.get("junction_side", "left"),
         )
     return lines
 
@@ -143,17 +120,86 @@ def _point_to_segment_distance(
     return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
 
 
+def _trim_trajectory_jumps(
+    trajectory: list[tuple[int, int, int]],
+    jump_threshold_px: float = 80.0,
+) -> list[tuple[int, int, int]]:
+    """Trim sudden position jumps from a trajectory.
+
+    When the tracker reassigns a track ID to a different vehicle during
+    occlusion, there's a sudden large displacement between consecutive
+    centroids.  This function scans from both ends inward and truncates
+    at the first jump that exceeds the threshold.
+
+    Returns the cleaned trajectory (may be shorter than input).
+    """
+    if len(trajectory) < 3:
+        return trajectory
+
+    # Scan forward: find first jump from the start
+    start = 0
+    for i in range(1, len(trajectory)):
+        dx = trajectory[i][0] - trajectory[i - 1][0]
+        dy = trajectory[i][1] - trajectory[i - 1][1]
+        if math.sqrt(dx * dx + dy * dy) > jump_threshold_px:
+            start = i
+            break
+
+    # Scan backward: find first jump from the end
+    end = len(trajectory)
+    for i in range(len(trajectory) - 1, 0, -1):
+        dx = trajectory[i][0] - trajectory[i - 1][0]
+        dy = trajectory[i][1] - trajectory[i - 1][1]
+        if math.sqrt(dx * dx + dy * dy) > jump_threshold_px:
+            end = i
+            break
+
+    trimmed = trajectory[start:end]
+    return trimmed if len(trimmed) >= 4 else trajectory
+
+
+def _heading(seg: list[tuple[int, int, int]]) -> tuple[float, float]:
+    """Compute (hx, hy) heading vector from a trajectory segment."""
+    return (seg[-1][0] - seg[0][0], seg[-1][1] - seg[0][1])
+
+
+def _angle_between(h1: tuple[float, float], h2: tuple[float, float]) -> float:
+    """Angle in degrees between two heading vectors. Returns 0-180."""
+    dot = h1[0] * h2[0] + h1[1] * h2[1]
+    m1 = math.sqrt(h1[0] ** 2 + h1[1] ** 2)
+    m2 = math.sqrt(h2[0] ** 2 + h2[1] ** 2)
+    if m1 < 1e-9 or m2 < 1e-9:
+        return 0.0
+    cos_a = max(-1.0, min(1.0, dot / (m1 * m2)))
+    return math.degrees(math.acos(cos_a))
+
+
+# Max heading divergence before we distrust the tail/head and use the
+# stable mid-trajectory heading instead. 60° is generous — a real turn
+# through a junction rarely exceeds this between the stable body and
+# the endpoint segment.
+_HEADING_DIVERGENCE_THRESHOLD = 60.0
+
+
 def nearest_arm(
     trajectory: list[tuple[int, int, int]],
     arms: dict[str, LineSeg],
     use_start: bool,
     roi_centroid: tuple[float, float] | None = None,
 ) -> str | None:
-    """Infer entry/exit arm by proximity — which line is closest to the
-    trajectory start (entry) or end (exit).
+    """Infer entry/exit arm by heading-projected proximity.
 
-    This is more robust than heading-based inference because vehicles
-    often cross lines at oblique angles rather than perpendicular.
+    Projects the trajectory backwards (entry) or forwards (exit) along
+    its heading to find which line the vehicle was approaching from or
+    heading toward.
+
+    To guard against tracker ID drift during occlusion (where the tail
+    or head of the trajectory gets contaminated by a different vehicle),
+    the endpoint heading is cross-checked against the stable mid-trajectory
+    heading. If they diverge by more than 60°, the stable heading is used.
+
+    Falls back to pure proximity if the heading is too short to be
+    reliable (< 5 pixels displacement).
 
     Args:
         trajectory: List of (x, y, frame) entries.
@@ -167,21 +213,66 @@ def nearest_arm(
     if len(trajectory) < 4:
         return None
 
-    # Average the first/last few centroids to reduce noise
+    # Layer 1: trim sudden position jumps (hard ID switches)
+    trajectory = _trim_trajectory_jumps(trajectory)
+
     n = min(5, len(trajectory) // 2)
     if n < 1:
         return None
 
-    segment = trajectory[:n] if use_start else trajectory[-n:]
-    avg_x = sum(p[0] for p in segment) / len(segment)
-    avg_y = sum(p[1] for p in segment) / len(segment)
+    # Compute stable mid-trajectory heading (25%-75% of trajectory)
+    # This is unlikely to be contaminated by tracker drift at either end.
+    q1 = len(trajectory) // 4
+    q3 = 3 * len(trajectory) // 4
+    stable_seg = trajectory[q1 : q3 + 1] if q3 > q1 else trajectory
+    stable_h = _heading(stable_seg)
+
+    if use_start:
+        seg = trajectory[:n]
+        anchor_x = sum(p[0] for p in seg) / len(seg)
+        anchor_y = sum(p[1] for p in seg) / len(seg)
+        endpoint_h = _heading(seg)
+
+        # Cross-check: if start heading diverges from stable, use stable
+        if _angle_between(endpoint_h, stable_h) > _HEADING_DIVERGENCE_THRESHOLD:
+            hx, hy = stable_h
+        else:
+            hx, hy = endpoint_h
+
+        proj_x = anchor_x - hx * 3.0
+        proj_y = anchor_y - hy * 3.0
+    else:
+        seg = trajectory[-n:]
+        anchor_x = sum(p[0] for p in seg) / len(seg)
+        anchor_y = sum(p[1] for p in seg) / len(seg)
+        endpoint_h = _heading(seg)
+
+        # Cross-check: if tail heading diverges from stable, use stable
+        # and also fall back to the anchor from the stable region end
+        if _angle_between(endpoint_h, stable_h) > _HEADING_DIVERGENCE_THRESHOLD:
+            hx, hy = stable_h
+            # Use the end of the stable region as anchor instead of
+            # the contaminated tail
+            clean_seg = trajectory[q3 - n : q3]
+            if len(clean_seg) >= 2:
+                anchor_x = sum(p[0] for p in clean_seg) / len(clean_seg)
+                anchor_y = sum(p[1] for p in clean_seg) / len(clean_seg)
+        else:
+            hx, hy = endpoint_h
+
+        proj_x = anchor_x + hx * 3.0
+        proj_y = anchor_y + hy * 3.0
+
+    heading_len = math.sqrt(hx * hx + hy * hy)
+    query_x = proj_x if heading_len > 5.0 else anchor_x
+    query_y = proj_y if heading_len > 5.0 else anchor_y
 
     best_arm = None
     best_dist = float("inf")
     for arm_id, line in arms.items():
         dist = _point_to_segment_distance(
-            avg_x,
-            avg_y,
+            query_x,
+            query_y,
             line.start[0],
             line.start[1],
             line.end[0],
@@ -221,6 +312,7 @@ class DirectionStateMachine:
         self.exit_label: str | None = None
         self.was_stagnant = False
         self.stopped_since_frame: int | None = None  # frame when vehicle first stopped
+        self._state_before_wait: TrackState = TrackState.UNKNOWN
         self._motion_check_window = 30  # frames to check for movement (~1s at 30fps)
 
     def on_crossing(
@@ -383,7 +475,6 @@ class DirectionStateMachine:
             # Vehicle is moving
             self.stopped_since_frame = None
             if self.state in (TrackState.WAITING, TrackState.STAGNANT):
-                prev = getattr(self, "_state_before_wait", TrackState.UNKNOWN)
-                self.state = TrackState.IN_TRANSIT if self.entry_arm else prev
+                self.state = TrackState.IN_TRANSIT if self.entry_arm else self._state_before_wait
 
         return False

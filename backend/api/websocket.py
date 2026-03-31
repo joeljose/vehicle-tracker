@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import queue
 import time
 from typing import Any
 
@@ -19,15 +18,17 @@ class WsBroadcaster:
     """Broadcast pipeline events to connected WebSocket clients.
 
     Pipeline callbacks (called from the pipeline thread) put messages into
-    a thread-safe queue. A background asyncio task drains the queue and
-    sends to all connected clients with optional channel filtering.
+    an asyncio.Queue via call_soon_threadsafe. A background asyncio task
+    drains the queue and sends to all connected clients with optional
+    channel filtering.
     """
 
     def __init__(self):
         # (websocket, channel_filter, type_filter) — None means all
         self._clients: list[tuple[WebSocket, set[int] | None, set[str] | None]] = []
-        self._queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._drain_task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         # Stats tracking for stats_update (per channel)
         self._stats_last_emit: dict[int, float] = {}  # channel_id -> last emit time
         self._stats_frame_count: dict[
@@ -37,6 +38,7 @@ class WsBroadcaster:
 
     async def start(self) -> None:
         """Start the background drain task."""
+        self._loop = asyncio.get_running_loop()
         self._drain_task = asyncio.create_task(self._drain_loop())
 
     async def stop(self) -> None:
@@ -64,8 +66,16 @@ class WsBroadcaster:
         self._clients = [(w, c, t) for w, c, t in self._clients if w is not ws]
 
     def enqueue(self, message: dict) -> None:
-        """Thread-safe: put a message on the broadcast queue."""
-        self._queue.put_nowait(message)
+        """Thread-safe: put a message on the broadcast queue.
+
+        When called from a non-event-loop thread (e.g. GStreamer pipeline thread),
+        uses call_soon_threadsafe to safely enqueue. When called from the event
+        loop thread or without a running loop (tests), enqueues directly.
+        """
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+        else:
+            self._queue.put_nowait(message)
 
     # -- Pipeline callbacks (called from pipeline thread) --
 
@@ -136,11 +146,7 @@ class WsBroadcaster:
     async def _drain_loop(self) -> None:
         """Background task: drain queue and broadcast to clients."""
         while True:
-            try:
-                msg = self._queue.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.01)
-                continue
+            msg = await self._queue.get()
             await self._broadcast(msg)
 
     async def _broadcast(self, message: dict) -> None:

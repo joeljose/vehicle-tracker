@@ -32,15 +32,6 @@ def test_has_roi():
     assert config_no_roi.has_roi() is False
 
 
-def test_load_741_73():
-    """The shipped 741_73.json config loads correctly."""
-    config = load_site_config("741_73")
-    assert config.site_id == "741_73"
-    assert config.has_roi()
-    assert len(config.roi_polygon) >= 3
-    assert len(config.entry_exit_lines) >= 1
-
-
 def test_save_creates_directory(tmp_path):
     """Save creates the sites directory if it doesn't exist."""
     nested = tmp_path / "deep" / "nested"

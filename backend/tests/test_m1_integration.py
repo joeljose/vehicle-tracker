@@ -37,7 +37,10 @@ def _run_junction(site_id, clip_path):
     from backend.pipeline.deepstream.pipeline import run_pipeline
     from backend.pipeline.direction import load_lines_from_config
 
-    config = load_site_config(site_id)
+    try:
+        config = load_site_config(site_id)
+    except FileNotFoundError:
+        pytest.skip(f"Site config '{site_id}' not found — save config from UI first")
     lines = load_lines_from_config(config.entry_exit_lines)
     snap_dir = SNAPSHOT_DIR / site_id
 
@@ -85,13 +88,14 @@ def test_roi_filtering_active(site_id, clip_path, caplog):
 
 
 @pytest.mark.parametrize("site_id,clip_path", JUNCTIONS, ids=[j[0] for j in JUNCTIONS])
-def test_line_calibration(site_id, clip_path):
-    """Entry/exit lines are auto-calibrated for each junction."""
+def test_line_config_present(site_id, clip_path):
+    """Entry/exit lines are present in pipeline summary."""
     summary, _ = _run_junction(site_id, clip_path)
-    calibrations = summary.get("calibrations", {})
-    # At least one line should be calibrated (depends on traffic)
-    calibrated = [c for c in calibrations.values() if c["calibrated"]]
-    print(f"  {site_id}: {len(calibrated)}/{len(calibrations)} lines calibrated")
+    lines = summary.get("lines", {})
+    for arm_id, line_info in lines.items():
+        assert "label" in line_info
+        assert "junction_side" in line_info
+    print(f"  {site_id}: {len(lines)} lines configured")
 
 
 @pytest.mark.parametrize("site_id,clip_path", JUNCTIONS, ids=[j[0] for j in JUNCTIONS])
@@ -108,8 +112,7 @@ def test_summary_report():
     for site_id, clip_path in JUNCTIONS:
         summary, snap_dir = _run_junction(site_id, clip_path)
         jpegs = list(snap_dir.glob("*.jpg")) if snap_dir.exists() else []
-        calibrations = summary.get("calibrations", {})
-        calibrated = sum(1 for c in calibrations.values() if c["calibrated"])
+        lines = summary.get("lines", {})
         confirmed = sum(
             1 for a in summary["transit_alerts"] if a.get("method") == "confirmed"
         )
@@ -125,7 +128,7 @@ def test_summary_report():
                 "merges": summary["merges"],
                 "transits_confirmed": confirmed,
                 "transits_inferred": inferred,
-                "calibrated_lines": f"{calibrated}/{len(calibrations)}",
+                "lines": len(lines),
                 "photos": len(jpegs),
                 "fps": summary["fps"],
             }
@@ -144,7 +147,7 @@ def test_summary_report():
         print(
             f"  Transits:    {r['transits_confirmed']} confirmed, {r['transits_inferred']} inferred"
         )
-        print(f"  Calibration: {r['calibrated_lines']} lines")
+        print(f"  Lines:       {r['lines']}")
         print(f"  Photos:      {r['photos']}")
         print(f"  FPS:         {r['fps']:.1f}")
     print("\n" + "=" * 70)

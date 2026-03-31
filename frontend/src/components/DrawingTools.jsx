@@ -32,6 +32,7 @@ export default function DrawingTools({
   pendingPoints,
   onClearRoi,
   onClearLine,
+  onFlipJunctionSide,
   onClearAll,
   onUndo,
   onStartAnalytics,
@@ -76,6 +77,7 @@ export default function DrawingTools({
         label: line.label,
         start: [line.start.x, line.start.y],
         end: [line.end.x, line.end.y],
+        junction_side: line.junction_side || "left",
       };
     }
     try {
@@ -103,6 +105,7 @@ export default function DrawingTools({
           label: val.label || key,
           start: { x: val.start[0], y: val.start[1] },
           end: { x: val.end[0], y: val.end[1] },
+          junction_side: val.junction_side || "left",
         })
       );
       onLoadConfig({ roi: loadedRoi, lines: loadedLines });
@@ -250,14 +253,26 @@ export default function DrawingTools({
                   <span className={`w-2.5 h-2.5 rounded-full ${LINE_COLORS[i % LINE_COLORS.length]}`} />
                   <span className="text-sm">{line.label}</span>
                 </div>
-                <button
-                  onClick={() => onClearLine(i)}
-                  className="text-text-muted hover:text-error-red transition-colors"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => onFlipJunctionSide(i)}
+                    title={`Junction side: ${line.junction_side || "left"} (click to flip)`}
+                    className="flex items-center gap-1 px-1.5 py-0.5 bg-surface border border-border rounded text-[10px] text-text-muted hover:text-text-primary hover:border-border-strong transition-colors"
+                  >
+                    <svg className={`w-3 h-3 ${line.junction_side === "right" ? "scale-x-[-1]" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                    </svg>
+                    {line.junction_side === "right" ? "R" : "L"}
+                  </button>
+                  <button
+                    onClick={() => onClearLine(i)}
+                    className="text-text-muted hover:text-error-red transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             ))}
           </div>

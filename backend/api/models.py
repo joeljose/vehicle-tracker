@@ -18,6 +18,7 @@ class EntryExitLine(BaseModel):
     label: str
     start: tuple[float, float]
     end: tuple[float, float]
+    junction_side: str = "left"  # "left" or "right" of start→end vector
 
 
 class SetPhaseRequest(BaseModel):
