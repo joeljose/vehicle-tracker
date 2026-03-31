@@ -3,6 +3,29 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-03-31
+
+### Added
+- YouTube Live stream support: accept YouTube URLs as channel sources
+- Source resolver module (`source_resolver.py`) with yt-dlp URL resolution to HLS
+- Async channel add: `POST /channel/add` returns 202 for YouTube URLs, WS notification on completion
+- Stream recovery: retry 3x with backoff → liveness check → URL re-extraction → reconnect
+- Circuit breaker: auto-eject channel after 3 pipeline rebuilds in 10 minutes
+- Serialized yt-dlp calls via asyncio.Lock to prevent YouTube rate limiting
+- Last frame buffer: MjpegExtractor keeps most recent JPEG, persisted at Phase 2→3 transition
+- Frozen-frame replay for YouTube Live: animated bbox on static last frame (transit), static bbox (stagnant)
+- `GET /channel/{id}/last_frame` endpoint for Phase 3 replay image
+- "Live" badge with red pulse indicator on channel cards for YouTube sources
+- yt-dlp + deno precompiled binaries in Dockerfile for YouTube JS extraction
+- Validation spike results documented in `docs/m6-spike-results.md`
+
+### Changed
+- `add_channel()` now accepts `source_type` and `original_url` kwargs (Protocol + all backends)
+- `nvurisrcbin` source URI: raw URL for HLS streams, `file://` prefix for local files
+- `file-loop` property only set for file sources (YouTube HLS streams don't loop)
+- Design doc Section 3.4 rewritten with grill session decisions
+- Quality selection removed from PRD (F-04a) — always best available quality
+
 ## [0.5.0] - 2026-03-31
 
 ### Added

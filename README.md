@@ -41,7 +41,7 @@ src_1 (nvurisrcbin) ─┤
 | M3 — React UI (4-phase workflow, drawing tools) | Complete | v0.3.0 | 286 |
 | M4 — DeepStream-FastAPI integration | Complete | v0.4.0 | 312 |
 | M5 — Multi-channel shared pipeline | Complete | v0.5.0 | 336 |
-| M6 — YouTube Live streams | Planned | — | — |
+| M6 — YouTube Live streams | Complete | v0.6.0 | 371 |
 
 ## Prerequisites
 

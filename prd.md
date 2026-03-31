@@ -1,8 +1,8 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.5
-**Status:** M5 Complete (v0.5.0)
+**Version:** 0.6
+**Status:** M6 Complete (v0.6.0)
 **Last updated:** March 2026
 
 ---
@@ -552,8 +552,8 @@ duration_ms, frames_stationary
 | M2 -- API layer | FastAPI server with REST + WebSocket + MJPEG endpoints. In-memory AlertStore for transit/stagnant alerts. PipelineBackend Protocol for pipeline-agnostic API boundary. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE (v0.2.0).** | M1 |
 | M3 -- React UI | React frontend with 4-phase workflow (Setup/Analytics/Review/Teardown), MJPEG video panel, ROI polygon and entry/exit line drawing tools on canvas overlay, alert feed sidebar with filter tabs, stats bar (FPS/tracks/inference), site config save/load, WebSocket integration, phase controls. 286 tests. **COMPLETE (v0.3.0).** | M2 |
 | M4 -- DeepStream-FastAPI integration | DeepStreamPipeline adapter class implementing PipelineBackend Protocol. Per-channel pipeline lifecycle (preview -> analytics -> review). MjpegExtractor BufferOperator for GPU->JPEG at ~15fps. Real-time alert delivery via callbacks. Clip extraction with ffmpeg for replay. EOS auto-transition with phase callback. 312 tests. **COMPLETE (v0.4.0).** | M3 |
-| M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. | M4 |
-| M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp` (async, best quality only), HLS stream consumption, stream recovery with circuit breaker, serialized `yt-dlp` calls, last-frame buffer for Phase 3 frozen-frame replay. Tested on live YouTube traffic camera feeds. | M5 |
+| M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. 336 tests. **COMPLETE (v0.5.0).** | M4 |
+| M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp` (async, best quality only), HLS stream consumption via `nvurisrcbin`, stream recovery with circuit breaker, serialized `yt-dlp` calls, last-frame buffer for Phase 3 frozen-frame replay. E2E validated on live 741 & Lytle South traffic camera. 371 tests. **COMPLETE (v0.6.0).** | M5 |
 | M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
 | M8 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M6 |
 
