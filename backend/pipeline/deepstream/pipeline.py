@@ -622,7 +622,7 @@ def build_pipeline(
 
         # Branch 2: OSD → encode
         pipeline.add("queue", "out_queue", {})
-        pipeline.add("nvdsosd", "osd", {"gpu-id": 0})
+        pipeline.add("nvdsosd", "osd", {"gpu-id": 0, "display-text": False})
         pipeline.link("split", "out_queue", "osd")
         osd_flow = Flow(pipeline, ["osd"])
         osd_flow.encode(f"file://{os.path.abspath(output_path)}")

@@ -534,7 +534,7 @@ class DeepStreamPipeline:
         # Add all elements first, then link (pyservicemaker requires
         # elements to exist before linking)
         pipeline.add("queue", q_name, {"leaky": 2, "max-size-buffers": 5})
-        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0})
+        pipeline.add("nvdsosd", osd_name, {"gpu-id": 0, "display-text": False})
         pipeline.add("nvvideoconvert", conv_name, {})
         pipeline.add(
             "capsfilter",
