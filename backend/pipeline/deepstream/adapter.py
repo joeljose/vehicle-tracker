@@ -162,7 +162,7 @@ class DeepStreamPipeline:
 
     def stop(self) -> None:
         for channel_id in list(self._states):
-            self._soft_remove_source(channel_id)
+            self._finalize_channel_state(channel_id)
         self.channels.clear()
         self._states.clear()
         if self._shared_pipeline is not None:
@@ -178,18 +178,16 @@ class DeepStreamPipeline:
         self.channels[channel_id] = source
         state = _ChannelState(source=source)
         self._states[channel_id] = state
-        self._ensure_shared_pipeline()
-        self._add_channel_to_pipeline(channel_id)
+        self._rebuild_shared_pipeline()
         logger.info("Channel %d added: %s", channel_id, source)
 
     def remove_channel(self, channel_id: int) -> None:
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")
-        self._soft_remove_source(channel_id)
+        self._finalize_channel_state(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
-        if not self._states and self._shared_pipeline is not None:
-            self._destroy_shared_pipeline()
+        self._rebuild_shared_pipeline()
         logger.info("Channel %d removed", channel_id)
 
     def configure_channel(
@@ -213,13 +211,13 @@ class DeepStreamPipeline:
         old_phase = state.phase
 
         if phase == ChannelPhase.ANALYTICS:
-            # Soft-remove setup source, add analytics source (non-looping)
-            self._soft_remove_source(channel_id)
-            self._add_analytics_source(channel_id)
+            self._finalize_channel_state(channel_id)
             state.phase = ChannelPhase.ANALYTICS
+            self._rebuild_shared_pipeline()
         elif phase == ChannelPhase.REVIEW:
-            self._soft_remove_source(channel_id)
+            self._finalize_channel_state(channel_id)
             state.phase = ChannelPhase.REVIEW
+            self._rebuild_shared_pipeline()
         else:
             state.phase = phase
 
@@ -303,28 +301,27 @@ class DeepStreamPipeline:
 
     # -- Shared pipeline (M5) --
 
-    def _ensure_shared_pipeline(self) -> None:
-        """Create the shared pipeline if it doesn't exist yet."""
-        if self._shared_pipeline is not None:
-            return
+    def _create_shared_pipeline(self) -> None:
+        """Create the shared pipeline infrastructure (does NOT start it).
 
+        Sources must be added via _add_channel_to_pipeline() before calling
+        _start_shared_pipeline(). nvurisrcbin elements added after start()
+        won't transition to PLAYING state.
+        """
         from backend.pipeline.deepstream.batch_router import BatchMetadataRouter
 
         pipeline = Pipeline("shared")
 
-        # Mux — sources added dynamically per channel
         pipeline.add("nvstreammux", "mux", {
-            "batch-size": 8,  # max channels
+            "batch-size": 8,
             "batched-push-timeout": 33000,
             "width": 1920,
             "height": 1080,
         })
 
-        # Shared inference
         pipeline.add("nvinfer", "infer", {"config-file-path": PGIE_CONFIG})
         pipeline.link("mux", "infer")
 
-        # Shared tracker
         pipeline.add("nvtracker", "tracker", {
             "tracker-width": 640,
             "tracker-height": 384,
@@ -334,17 +331,85 @@ class DeepStreamPipeline:
         })
         pipeline.link("infer", "tracker")
 
-        # Batch metadata router — dispatches per-source frames to channel reporters
         self._batch_router = BatchMetadataRouter({})
         pipeline.attach("tracker", Probe("batch_router", self._batch_router))
 
-        # Demux — per-channel output branches added dynamically
         pipeline.add("nvstreamdemux", "demux", {})
         pipeline.link("tracker", "demux")
 
         self._shared_pipeline = pipeline
-        pipeline.start(on_message=self._on_pipeline_message)
-        logger.info("Shared pipeline created and started")
+        self._source_index = 0
+        logger.info("Shared pipeline created (not yet started)")
+
+    def _start_shared_pipeline(self) -> None:
+        """Start the shared pipeline (all sources must be added first)."""
+        if self._shared_pipeline is None:
+            return
+        self._shared_pipeline.start(on_message=self._on_pipeline_message)
+        logger.info("Shared pipeline started")
+
+    def _rebuild_shared_pipeline(self) -> None:
+        """Tear down and rebuild the shared pipeline with all current channels.
+
+        nvurisrcbin can't be added to a running pipeline (won't sync to
+        PLAYING state), so we rebuild from scratch whenever the channel
+        set changes. Old pipeline is stopped in a background thread.
+        """
+        # Tear down old pipeline — set sources to non-loop so they drain,
+        # then defer stop in background thread after EOS.
+        # Direct stop() causes C++ terminate when asyncio loop is running.
+        if self._shared_pipeline is not None:
+            old_pipeline = self._shared_pipeline
+            self._shared_pipeline = None
+            self._batch_router = None
+
+            # Drain all sources on old pipeline
+            for state in self._states.values():
+                if state._src_name:
+                    try:
+                        old_pipeline[state._src_name].set({"file-loop": False})
+                    except Exception:
+                        pass
+
+            import threading as _threading
+
+            def _deferred_stop():
+                try:
+                    old_pipeline.wait()
+                    old_pipeline.stop()
+                except Exception:
+                    pass
+
+            _threading.Thread(target=_deferred_stop, daemon=True).start()
+
+        # Disable MJPEG callbacks on all channels (prevent stale frames)
+        for state in self._states.values():
+            if state.mjpeg_extractor:
+                state.mjpeg_extractor._callback = None
+                state.mjpeg_extractor = None
+            state.pipeline = None
+            state.reporter = None
+            state.best_photo = None
+            state._source_idx = None
+            state._src_name = None
+
+        # Rebuild with all active channels
+        active = [
+            cid for cid, s in self._states.items()
+            if s.phase in (ChannelPhase.SETUP, ChannelPhase.ANALYTICS)
+        ]
+        if not active:
+            return
+
+        self._create_shared_pipeline()
+        for channel_id in active:
+            state = self._states[channel_id]
+            if state.phase == ChannelPhase.ANALYTICS:
+                self._add_analytics_source(channel_id)
+            else:
+                self._add_channel_to_pipeline(channel_id)
+        self._start_shared_pipeline()
+        logger.info("Shared pipeline rebuilt with %d channels", len(active))
 
     def _add_channel_to_pipeline(
         self, channel_id: int, *, file_loop: bool = True,
@@ -397,16 +462,8 @@ class DeepStreamPipeline:
         mjpeg_extractor = MjpegExtractor(channel_id, on_frame, reporter)
         state.mjpeg_extractor = mjpeg_extractor
 
-        # Add source to mux
-        src_name = f"src_{src_idx}"
-        state._src_name = src_name
-        pipeline.add("nvurisrcbin", src_name, {
-            "uri": file_uri,
-            "file-loop": file_loop,
-        })
-        pipeline.link((src_name, "mux"), ("", "sink_%u"))
-
-        # Per-channel demux output → OSD → MJPEG
+        # Create demux output branch BEFORE source — nvstreamdemux can't
+        # allocate request pads while data is already flowing through it.
         q_name = f"q_{src_idx}"
         osd_name = f"osd_{src_idx}"
         conv_name = f"conv_{src_idx}"
@@ -422,6 +479,15 @@ class DeepStreamPipeline:
         pipeline.link(("demux", q_name), ("src_%u", ""))
         pipeline.link(q_name, osd_name, conv_name, caps_name, sink_name)
         pipeline.attach(caps_name, Probe(f"mjpeg_{src_idx}", mjpeg_extractor))
+
+        # Add source to mux AFTER demux branch is ready
+        src_name = f"src_{src_idx}"
+        state._src_name = src_name
+        pipeline.add("nvurisrcbin", src_name, {
+            "uri": file_uri,
+            "file-loop": file_loop,
+        })
+        pipeline.link((src_name, "mux"), ("", "sink_%u"))
 
         state.pipeline = pipeline
         logger.info("Channel %d added to shared pipeline (src_idx=%d, loop=%s)",
@@ -525,7 +591,6 @@ class DeepStreamPipeline:
         def on_eos(source_id):
             self._safe_callback(self._on_source_eos, channel_id)
 
-        self._ensure_shared_pipeline()
         self._add_channel_to_pipeline(
             channel_id,
             file_loop=False,
@@ -544,8 +609,9 @@ class DeepStreamPipeline:
         if state.phase != ChannelPhase.ANALYTICS:
             return
         previous = state.phase
-        self._soft_remove_source(channel_id)
+        self._finalize_channel_state(channel_id)
         state.phase = ChannelPhase.REVIEW
+        self._rebuild_shared_pipeline()
         logger.info("Channel %d auto-transitioned to REVIEW (source EOS)", channel_id)
         self._safe_callback(
             self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
