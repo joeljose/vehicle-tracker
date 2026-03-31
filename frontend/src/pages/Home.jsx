@@ -130,6 +130,12 @@ export default function Home() {
       try {
         await removeChannel(channelId);
         dispatch({ type: "REMOVE_CHANNEL", channelId });
+        // Notify open channel tabs to close
+        try {
+          const bc = new BroadcastChannel("vehicle_tracker");
+          bc.postMessage({ type: "channel_removed", channelId });
+          bc.close();
+        } catch (_) { /* BroadcastChannel not supported */ }
         toast("Channel removed");
       } catch (e) {
         toast(e.message, "error");

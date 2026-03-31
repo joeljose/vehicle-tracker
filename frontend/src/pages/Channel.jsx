@@ -209,6 +209,19 @@ function ChannelContent() {
     return () => ws.close();
   }, [channelId]);
 
+  // Close tab when channel is removed from Home
+  useEffect(() => {
+    try {
+      const bc = new BroadcastChannel("vehicle_tracker");
+      bc.onmessage = (e) => {
+        if (e.data?.type === "channel_removed" && e.data.channelId === channelId) {
+          window.close();
+        }
+      };
+      return () => bc.close();
+    } catch (_) { /* BroadcastChannel not supported */ }
+  }, [channelId]);
+
   // Clean up debounce timer on unmount
   useEffect(() => () => clearTimeout(confTimerRef.current), []);
 
@@ -294,6 +307,19 @@ function ChannelContent() {
     }
   }, [channelId, roi, lines, dispatch, toast]);
 
+  const handleStopAnalytics = useCallback(async () => {
+    setPhaseLoading(true);
+    try {
+      await setChannelPhase(channelId, "review");
+      dispatch({ type: "SET_PHASE", phase: "review" });
+      toast("Analytics stopped — moved to Review");
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      setPhaseLoading(false);
+    }
+  }, [channelId, dispatch, toast]);
+
   const handleConfidenceChange = useCallback((e) => {
     const val = parseFloat(e.target.value);
     clearTimeout(confTimerRef.current);
@@ -345,7 +371,7 @@ function ChannelContent() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Control Bar */}
       <div className="bg-surface border-b border-border px-4 py-2.5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
@@ -423,6 +449,8 @@ function ChannelContent() {
             phase={phase}
             selectedAlertId={selectedAlert?.alert_id}
             onSelectAlert={setSelectedAlert}
+            onStopAnalytics={phase === "analytics" ? handleStopAnalytics : undefined}
+            stopLoading={phaseLoading}
           />
         )}
       </div>

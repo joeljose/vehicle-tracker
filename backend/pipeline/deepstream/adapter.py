@@ -48,16 +48,27 @@ class MjpegExtractor(BufferOperator):
         try:
             self._frame_count += 1
 
-            # Rate limit to ~15fps
+            import cupy as cp
+            import cv2
+
+            # Extract best-photo crops on every frame (not rate-limited)
+            # so pending crops from BestPhotoTracker.score() are captured
+            # promptly. This replaces the legacy FrameExtractor branch.
+            best_photo = self._reporter.best_photo
+            if best_photo and best_photo.pending_crops:
+                for batch_id in range(buffer.batch_size):
+                    tensor = buffer.extract(batch_id)
+                    gpu_arr = cp.from_dlpack(tensor)
+                    frame = cp.asnumpy(gpu_arr)
+                    best_photo.extract_crops(frame)
+
+            # Rate limit MJPEG emission to ~15fps
             now = time.monotonic()
             if now - self._last_emit_time < self._min_interval:
                 return True
 
             if self._callback is None:
                 return True
-
-            import cupy as cp
-            import cv2
 
             for batch_id in range(buffer.batch_size):
                 tensor = buffer.extract(batch_id)
@@ -224,6 +235,11 @@ class DeepStreamPipeline:
 
         logger.info("Channel %d: %s -> %s",
                      channel_id, old_phase.value, phase.value)
+
+        if old_phase != phase:
+            self._safe_callback(
+                self._phase_callback, channel_id, phase, old_phase
+            )
 
     def get_channel_phase(self, channel_id: int) -> ChannelPhase:
         if channel_id not in self._states:

@@ -200,7 +200,7 @@ function AlertDetail({ alert }) {
   );
 }
 
-export default function AlertFeed({ phase, selectedAlertId, onSelectAlert }) {
+export default function AlertFeed({ phase, selectedAlertId, onSelectAlert, onStopAnalytics, stopLoading }) {
   const { state, dispatch } = useAlerts();
   const parentRef = useRef(null);
   const [newCount, setNewCount] = useState(0);
@@ -265,6 +265,18 @@ export default function AlertFeed({ phase, selectedAlertId, onSelectAlert }) {
 
   return (
     <div className="w-[300px] bg-surface border-l border-border flex flex-col shrink-0">
+      {/* Stop Analytics */}
+      {onStopAnalytics && (
+        <div className="px-3 py-2.5 border-b border-border shrink-0">
+          <button
+            onClick={onStopAnalytics}
+            disabled={stopLoading}
+            className="w-full px-3 py-2 bg-error-red/10 text-error-red hover:bg-error-red/20 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {stopLoading ? "Stopping..." : "Stop Analytics"}
+          </button>
+        </div>
+      )}
       {/* Filter Bar */}
       <div className="px-3 py-2.5 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-1 bg-background rounded-lg p-0.5">
