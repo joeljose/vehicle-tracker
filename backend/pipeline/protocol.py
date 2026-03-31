@@ -61,7 +61,14 @@ class PipelineBackend(Protocol):
         """Stop pipeline, release all GPU resources cleanly."""
         ...
 
-    def add_channel(self, channel_id: int, source: str) -> None:
+    def add_channel(
+        self,
+        channel_id: int,
+        source: str,
+        *,
+        source_type: str = "file",
+        original_url: str | None = None,
+    ) -> None:
         """Add a video source (file path or resolved HLS URL) to the pipeline."""
         ...
 

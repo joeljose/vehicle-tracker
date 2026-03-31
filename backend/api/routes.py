@@ -172,11 +172,12 @@ async def _resolve_and_add_channel(app, source: str, request_id: str) -> None:
         resolved = await resolve_source(source)
         channel_id = app.state.next_channel_id
         app.state.next_channel_id += 1
-        backend.add_channel(channel_id, resolved.stream_url)
-        # Store the original YouTube URL for recovery/display
-        if not hasattr(app.state, "youtube_sources"):
-            app.state.youtube_sources = {}
-        app.state.youtube_sources[channel_id] = source
+        backend.add_channel(
+            channel_id,
+            resolved.stream_url,
+            source_type="youtube_live",
+            original_url=source,
+        )
         ws.enqueue(
             {
                 "type": "channel_added",

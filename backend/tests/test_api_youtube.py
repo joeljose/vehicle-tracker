@@ -80,30 +80,6 @@ class TestYoutubeResolutionBackground:
         assert 0 in backend.channels
         assert backend.channels[0] == "https://manifest.googlevideo.com/hls"
 
-    def test_successful_resolution_stores_youtube_url(self, app, client):
-        """Original YouTube URL stored for recovery/display."""
-        from backend.pipeline.source_resolver import ResolvedSource
-
-        fake_resolved = ResolvedSource(
-            source_type="youtube_live",
-            stream_url="https://manifest.googlevideo.com/hls",
-            original_url="https://www.youtube.com/watch?v=abc123",
-        )
-
-        client.post("/pipeline/start")
-
-        with patch(
-            "backend.api.routes.resolve_source",
-            new_callable=AsyncMock,
-            return_value=fake_resolved,
-        ):
-            client.post(
-                "/channel/add",
-                json={"source": "https://www.youtube.com/watch?v=abc123"},
-            )
-
-        assert app.state.youtube_sources[0] == "https://www.youtube.com/watch?v=abc123"
-
     def test_failed_resolution_no_channel(self, app, client):
         """Failed resolution should not create a channel."""
         client.post("/pipeline/start")
