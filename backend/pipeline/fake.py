@@ -36,7 +36,14 @@ class FakeBackend:
         self.channels.clear()
         self.channel_phases.clear()
 
-    def add_channel(self, channel_id: int, source: str) -> None:
+    def add_channel(
+        self,
+        channel_id: int,
+        source: str,
+        *,
+        source_type: str = "file",
+        original_url: str | None = None,
+    ) -> None:
         if not self.started:
             raise RuntimeError("Pipeline not started")
         if channel_id in self.channels:

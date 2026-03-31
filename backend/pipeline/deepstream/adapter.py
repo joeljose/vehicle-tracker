@@ -24,6 +24,7 @@ from backend.pipeline.deepstream.config import (
 from backend.pipeline.deepstream.pipeline import TrackingReporter
 from backend.pipeline.protocol import ChannelPhase, Detection, FrameResult
 from backend.pipeline.snapshot import BestPhotoTracker
+from backend.pipeline.stream_recovery import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ class MjpegExtractor(BufferOperator):
 
     Runs on the OSD branch of the pipeline. Converts GPU buffer to numpy
     via CuPy, encodes to JPEG, and invokes the frame callback at ~15fps.
+
+    Also keeps a reference to the most recent JPEG as `last_frame` for
+    Phase 3 frozen-frame replay (YouTube Live sources have no recorded video).
     """
 
     def __init__(self, channel_id: int, callback, reporter: TrackingReporter):
@@ -43,6 +47,7 @@ class MjpegExtractor(BufferOperator):
         self._frame_count = 0
         self._last_emit_time = 0.0
         self._min_interval = 1.0 / 15.0  # ~15fps cap
+        self.last_frame: bytes | None = None  # most recent JPEG for Phase 3 replay
 
     def handle_buffer(self, buffer):
         try:
@@ -100,6 +105,9 @@ class MjpegExtractor(BufferOperator):
                             )
                         )
 
+                # Keep reference to most recent JPEG for Phase 3 replay
+                self.last_frame = jpeg_bytes
+
                 result = FrameResult(
                     channel_id=self._channel_id,
                     frame_number=self._reporter.frame_count,
@@ -132,6 +140,8 @@ class _ChannelState:
     entry_exit_lines: dict = field(default_factory=dict)
     _source_idx: int | None = None  # mux pad index (matches frame_meta.source_id)
     _src_name: str | None = None  # GStreamer element name (e.g. "src_0")
+    source_type: str = "file"  # "file" or "youtube_live"
+    original_url: str | None = None  # YouTube URL for recovery (None for files)
 
 
 class DeepStreamPipeline:
@@ -157,6 +167,9 @@ class DeepStreamPipeline:
         self._shared_pipeline: Pipeline | None = None
         self._batch_router = None
         self._source_index: int = 0  # monotonic source counter for mux pads
+        # Stream recovery (M6)
+        self._circuit_breaker = CircuitBreaker()
+        self._recovering: set[int] = set()  # channel_ids currently in recovery
 
     # -- Lifecycle --
 
@@ -181,14 +194,24 @@ class DeepStreamPipeline:
 
     # -- Channel management --
 
-    def add_channel(self, channel_id: int, source: str) -> None:
+    def add_channel(
+        self,
+        channel_id: int,
+        source: str,
+        *,
+        source_type: str = "file",
+        original_url: str | None = None,
+    ) -> None:
         if channel_id in self.channels:
             raise ValueError(f"Channel {channel_id} already exists")
         self.channels[channel_id] = source
-        state = _ChannelState(source=source)
+        state = _ChannelState(
+            source=source, source_type=source_type, original_url=original_url
+        )
         self._states[channel_id] = state
+        self._circuit_breaker.reset(channel_id)
         self._rebuild_shared_pipeline()
-        logger.info("Channel %d added: %s", channel_id, source)
+        logger.info("Channel %d added: %s (type=%s)", channel_id, source, source_type)
 
     def remove_channel(self, channel_id: int) -> None:
         if channel_id not in self.channels:
@@ -228,6 +251,8 @@ class DeepStreamPipeline:
             state.phase = ChannelPhase.ANALYTICS
             self._rebuild_shared_pipeline()
         elif phase == ChannelPhase.REVIEW:
+            # Persist last frame before finalizing (for Phase 3 replay)
+            self._persist_last_frame(channel_id)
             self._finalize_channel_state(channel_id)
             state.phase = ChannelPhase.REVIEW
             self._rebuild_shared_pipeline()
@@ -455,7 +480,11 @@ class DeepStreamPipeline:
         """
         state = self._states[channel_id]
         source = state.source
-        file_uri = f"file://{os.path.abspath(source)}"
+        # YouTube HLS URLs are passed directly; file paths need file:// prefix
+        if source.startswith(("http://", "https://")):
+            source_uri = source
+        else:
+            source_uri = f"file://{os.path.abspath(source)}"
         pipeline = self._shared_pipeline
 
         # Assign monotonic source index (matches mux pad / frame_meta.source_id)
@@ -526,14 +555,11 @@ class DeepStreamPipeline:
         # Add source to mux AFTER demux branch is ready
         src_name = f"src_{src_idx}"
         state._src_name = src_name
-        pipeline.add(
-            "nvurisrcbin",
-            src_name,
-            {
-                "uri": file_uri,
-                "file-loop": file_loop,
-            },
-        )
+        src_props = {"uri": source_uri}
+        # file-loop only applies to file sources; YouTube HLS streams don't loop
+        if not source.startswith(("http://", "https://")):
+            src_props["file-loop"] = file_loop
+        pipeline.add("nvurisrcbin", src_name, src_props)
         pipeline.link((src_name, "mux"), ("", "sink_%u"))
 
         state.pipeline = pipeline
@@ -671,6 +697,8 @@ class DeepStreamPipeline:
         if state.phase != ChannelPhase.ANALYTICS:
             return
         previous = state.phase
+        # Persist last frame before finalizing (for Phase 3 replay)
+        self._persist_last_frame(channel_id)
         self._finalize_channel_state(channel_id)
         state.phase = ChannelPhase.REVIEW
         self._rebuild_shared_pipeline()
@@ -680,14 +708,206 @@ class DeepStreamPipeline:
         )
 
     def _on_pipeline_message(self, message) -> None:
-        """Handle pipeline-level messages (EOS fallback)."""
+        """Handle pipeline-level messages (EOS fallback + error detection)."""
         msg_str = str(message).lower()
         if "eos" in msg_str:
             logger.info("Pipeline-level EOS received")
             if self._batch_router is not None:
                 self._safe_callback(lambda: self._batch_router.fire_all_pending_eos())
+        elif "error" in msg_str:
+            # GStreamer error — check if it's from a YouTube source
+            logger.warning("Pipeline error: %s", msg_str[:200])
+            self._safe_callback(self._on_pipeline_error, msg_str)
 
-    # -- Legacy methods removed in M5-P2 --
-    # _start_preview_pipeline, _start_analytics_pipeline, _stop_channel_pipeline
-    # replaced by shared pipeline: _add_channel_to_pipeline, _add_analytics_source,
-    # _soft_remove_source
+    def _on_pipeline_error(self, error_msg: str) -> None:
+        """Handle GStreamer errors — trigger recovery for YouTube sources."""
+        # Find YouTube channels in ANALYTICS that might need recovery
+        for channel_id, state in self._states.items():
+            if (
+                state.source_type == "youtube_live"
+                and state.phase == ChannelPhase.ANALYTICS
+                and channel_id not in self._recovering
+            ):
+                self._trigger_recovery(channel_id, error_msg)
+                break  # Handle one channel at a time
+
+    def _trigger_recovery(self, channel_id: int, reason: str) -> None:
+        """Start async recovery for a YouTube Live channel."""
+        if channel_id in self._recovering:
+            return
+        self._recovering.add(channel_id)
+        logger.info(
+            "Channel %d: starting stream recovery (reason: %s)",
+            channel_id,
+            reason[:100],
+        )
+        # Notify frontend
+        self._safe_callback(
+            self._ws_enqueue,
+            {
+                "type": "pipeline_event",
+                "event": "stream_recovering",
+                "channel": channel_id,
+                "detail": "Stream interrupted, attempting recovery",
+            },
+        )
+        # Run recovery in background
+        import threading
+
+        threading.Thread(
+            target=self._run_recovery, args=(channel_id,), daemon=True
+        ).start()
+
+    def _run_recovery(self, channel_id: int) -> None:
+        """Recovery flow: retry → liveness → re-extract → give up.
+
+        Runs in a background thread. On success, triggers pipeline rebuild
+        on the asyncio event loop.
+        """
+        import asyncio as _asyncio
+
+        from backend.pipeline.source_resolver import (
+            check_stream_liveness,
+            re_extract_url,
+        )
+        from backend.pipeline.stream_recovery import RETRY_DELAYS
+
+        state = self._states.get(channel_id)
+        if state is None or state.original_url is None:
+            self._recovering.discard(channel_id)
+            return
+
+        original_url = state.original_url
+
+        # Step 1: Retry existing URL (backoff)
+        for i, delay in enumerate(RETRY_DELAYS):
+            logger.info(
+                "Channel %d: retry %d/%d in %.0fs",
+                channel_id,
+                i + 1,
+                len(RETRY_DELAYS),
+                delay,
+            )
+            time.sleep(delay)
+            # If channel was removed during recovery, bail
+            if channel_id not in self._states:
+                self._recovering.discard(channel_id)
+                return
+
+        # Step 2: Check liveness
+        loop = _asyncio.new_event_loop()
+        try:
+            is_live = loop.run_until_complete(check_stream_liveness(original_url))
+        finally:
+            loop.close()
+
+        if not is_live:
+            # Stream ended — auto-transition to Review
+            logger.info("Channel %d: stream ended, transitioning to Review", channel_id)
+            self._recovering.discard(channel_id)
+            self._safe_callback(self._on_source_eos, channel_id)
+            return
+
+        # Step 3: Re-extract fresh HLS URL
+        logger.info("Channel %d: stream still live, re-extracting URL", channel_id)
+        loop = _asyncio.new_event_loop()
+        try:
+            new_url = loop.run_until_complete(re_extract_url(original_url))
+        except (ValueError, TimeoutError) as exc:
+            logger.warning("Channel %d: re-extraction failed: %s", channel_id, exc)
+            self._recovering.discard(channel_id)
+            self._safe_callback(self._on_recovery_failed, channel_id, str(exc))
+            return
+        finally:
+            loop.close()
+
+        # Step 4: Check circuit breaker before rebuilding
+        self._circuit_breaker.record_rebuild(channel_id)
+        if self._circuit_breaker.is_tripped(channel_id):
+            logger.warning("Channel %d: circuit breaker tripped, ejecting", channel_id)
+            self._recovering.discard(channel_id)
+            self._safe_callback(self._eject_channel, channel_id)
+            return
+
+        # Step 5: Swap source URL and rebuild
+        logger.info("Channel %d: reconnecting with fresh URL", channel_id)
+        state = self._states.get(channel_id)
+        if state is not None:
+            state.source = new_url
+            self.channels[channel_id] = new_url
+        self._recovering.discard(channel_id)
+        self._safe_callback(self._rebuild_shared_pipeline)
+        self._safe_callback(
+            self._ws_enqueue,
+            {
+                "type": "pipeline_event",
+                "event": "stream_recovered",
+                "channel": channel_id,
+                "detail": "Stream reconnected",
+            },
+        )
+
+    def _on_recovery_failed(self, channel_id: int, error: str) -> None:
+        """Notify operator that stream recovery failed."""
+        self._safe_callback(
+            self._ws_enqueue,
+            {
+                "type": "pipeline_event",
+                "event": "stream_recovery_failed",
+                "channel": channel_id,
+                "detail": f"Recovery failed: {error}",
+            },
+        )
+
+    def _eject_channel(self, channel_id: int) -> None:
+        """Remove a channel due to circuit breaker trip."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        previous = state.phase
+        self._finalize_channel_state(channel_id)
+        state.phase = ChannelPhase.REVIEW
+        self._rebuild_shared_pipeline()
+        logger.info("Channel %d ejected (circuit breaker)", channel_id)
+        self._safe_callback(
+            self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
+        )
+        self._safe_callback(
+            self._ws_enqueue,
+            {
+                "type": "pipeline_event",
+                "event": "channel_ejected",
+                "channel": channel_id,
+                "detail": "Channel ejected: too many recovery attempts",
+            },
+        )
+
+    def _ws_enqueue(self, message: dict) -> None:
+        """Enqueue a WS message (requires _ws_broadcaster set by API layer)."""
+        if hasattr(self, "_ws_broadcaster") and self._ws_broadcaster is not None:
+            self._ws_broadcaster.enqueue(message)
+
+    def register_ws_broadcaster(self, broadcaster) -> None:
+        """Register WS broadcaster for recovery notifications."""
+        self._ws_broadcaster = broadcaster
+
+    def _persist_last_frame(self, channel_id: int) -> None:
+        """Save the last MJPEG frame to disk for Phase 3 replay."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        jpeg = None
+        if state.mjpeg_extractor and state.mjpeg_extractor.last_frame:
+            jpeg = state.mjpeg_extractor.last_frame
+        if not isinstance(jpeg, bytes):
+            return
+
+        from pathlib import Path
+
+        frame_dir = Path("snapshots") / str(channel_id)
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = frame_dir / "last_frame.jpg"
+        frame_path.write_bytes(jpeg)
+        logger.info(
+            "Channel %d: persisted last frame (%d bytes)", channel_id, len(jpeg)
+        )

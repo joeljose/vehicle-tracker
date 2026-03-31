@@ -107,6 +107,10 @@ def create_app(backend: str = "deepstream") -> FastAPI:
     pipeline_backend.register_track_ended_callback(ws.on_track_ended)
     pipeline_backend.register_phase_callback(on_phase_change)
 
+    # Register WS broadcaster for stream recovery notifications (M6)
+    if hasattr(pipeline_backend, "register_ws_broadcaster"):
+        pipeline_backend.register_ws_broadcaster(ws)
+
     app.include_router(router)
     app.include_router(mjpeg_router)
     app.include_router(ws_router)
