@@ -411,7 +411,7 @@ function ChannelContent() {
         {/* Video / Replay Panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {phase === "review" ? (
-            <ReplayView alert={selectedAlert} lines={lines} />
+            <ReplayView alert={selectedAlert} lines={lines} source={source} />
           ) : (
             <VideoPanel
               channelId={channelId}

@@ -17,7 +17,7 @@ const LABEL_BG = "rgba(0,0,0,0.7)";
  *   alert - selected alert summary (from AlertFeed click)
  *   lines - entry/exit lines to overlay
  */
-export default function ReplayView({ alert, lines }) {
+export default function ReplayView({ alert, lines, source }) {
   const [fullAlert, setFullAlert] = useState(null);
   const [replayStatus, setReplayStatus] = useState(null);
   const [error, setError] = useState(null);
@@ -50,11 +50,13 @@ export default function ReplayView({ alert, lines }) {
     return () => { cancelled = true; };
   }, [alert?.alert_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll for clip extraction (file sources only)
+  // Detect YouTube Live source
+  const isYouTube = source && /^https?:\/\/(www\.)?youtube\.com|^https?:\/\/youtu\.be|^https?:\/\/manifest\.googlevideo\.com/.test(source);
+
+  // Poll for clip extraction (file sources only — YouTube has no clips)
   useEffect(() => {
-    if (!alert || !fullAlert) return;
-    // Don't poll for YouTube Live — there's no clip to extract
-    if (replayStatus !== "extracting") return;
+    if (!alert || !fullAlert || isYouTube) return;
+    if (replayStatus !== "extracting" && replayStatus !== "not_started") return;
     let cancelled = false;
     const pollTimer = setInterval(async () => {
       try {
@@ -63,10 +65,10 @@ export default function ReplayView({ alert, lines }) {
       } catch { /* ignore */ }
     }, 2000);
     return () => { cancelled = true; clearInterval(pollTimer); };
-  }, [alert?.alert_id, replayStatus, fullAlert]);
+  }, [alert?.alert_id, replayStatus, fullAlert, isYouTube]);
 
-  // Determine if this is a frozen-frame replay (YouTube Live)
-  const isFrozenFrame = replayStatus === "not_started" && fullAlert != null;
+  // Frozen-frame replay only for YouTube Live (no video clip available)
+  const isFrozenFrame = isYouTube && fullAlert != null;
 
   // Canvas overlay for bbox + trajectory (video clip replay)
   const drawOverlay = useCallback(() => {
