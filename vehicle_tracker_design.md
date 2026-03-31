@@ -534,21 +534,32 @@ Given line segment AB and consecutive centroids P1, P2:
   If sign(cross1) != sign(cross2), the centroid crossed the line between these frames.
 ```
 
-The direction of crossing (into or out of the junction) is determined by the sign of the cross product. However, the sign's meaning depends on line endpoint drawing order (left-to-right vs right-to-left), which the operator should not need to care about.
+The direction of crossing (into or out of the junction) is determined by the sign of the cross product. The sign's meaning depends on which side of the line is "inside" the junction.
 
-**Auto-calibration:** During Phase 1, the system observes the first 5-10 vehicles crossing each line. For each crossing, it records which side the vehicle came from (based on the prior centroid) and which side it went to. The majority vote determines which sign corresponds to "entry" (approaching from outside) vs "exit" (leaving toward outside). This polarity is stored in the site config and can be manually overridden. Auto-calibration requires vehicles to cross each line during Phase 1, which is expected since the operator watches traffic flow while drawing lines.
+**User-specified junction side:** When the operator draws an entry/exit line during Setup, a junction-side indicator (small triangle) appears on one side of the line, showing which side is considered "inside the junction." The operator can flip this with one click. The convention:
+
+- **Left side** of the start→end vector = positive cross product
+- **Right side** = negative cross product
+- `junction_side: "left" | "right"` is stored per line in the site config
+
+This eliminates the need for any auto-calibration delay — alerts start immediately when analytics begins.
 
 ```python
-def check_line_crossing(line: LineSeg, prev_centroid: Point, curr_centroid: Point) -> str | None:
-    """Returns 'entry', 'exit', or None."""
-    ax, ay = line.start
-    bx, by = line.end
-    cross_prev = (bx - ax) * (prev_centroid.y - ay) - (by - ay) * (prev_centroid.x - ax)
-    cross_curr = (bx - ax) * (curr_centroid.y - ay) - (by - ay) * (curr_centroid.x - ax)
-
-    if cross_prev * cross_curr < 0:  # sign change
-        return "entry" if cross_prev > 0 else "exit"
+def check_line_crossing(line: LineSeg, prev: Point, curr: Point) -> int | None:
+    """Returns +1 (neg→pos), -1 (pos→neg), or None."""
+    cross_prev = (B - A) x (prev - A)
+    cross_curr = (B - A) x (curr - A)
+    if sign(cross_prev) != sign(cross_curr):
+        return +1 if cross_prev < 0 else -1
     return None
+
+def classify_crossing(line: LineSeg, crossing_direction: int) -> str:
+    """Deterministic entry/exit from user-specified junction side."""
+    junction_is_positive = (line.junction_side == "left")
+    if junction_is_positive:
+        return "entry" if crossing_direction == +1 else "exit"
+    else:
+        return "entry" if crossing_direction == -1 else "exit"
 ```
 
 ### 6.3 Per-Track Direction State Machine

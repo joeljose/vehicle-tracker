@@ -174,7 +174,7 @@ Each channel independently progresses through four phases. Multiple channels can
 |---|---|---|
 | F-25 | Direction detection uses entry/exit line crossing per junction arm | Must |
 | F-26 | Line crossing is detected via sign change of cross-product on consecutive centroids relative to the line segment | Must |
-| F-26a | Line polarity (which side is junction interior) is auto-calibrated by observing the first 5-10 vehicles crossing each line during Phase 1 -- operator does not need to specify drawing direction | Must |
+| F-26a | Line polarity (which side is junction interior) is specified by the operator via a junction-side indicator shown after drawing each line. The indicator can be flipped with one click. Polarity is stored in the site config as `junction_side: "left" \| "right"` per line. No auto-calibration delay — alerts start immediately. | Must |
 | F-27 | Per-track direction state machine: UNKNOWN -> ENTERED(arm) -> EXITED(arm) -> ALERT | Must |
 | F-28 | Confirmed transit: vehicle crossed both an entry line and an exit line -- entry and exit arms are known precisely | Must |
 | F-29 | Inferred transit: when a track is lost before crossing an exit line (or appears after an entry line), proximity to entry/exit line segments is used to infer the missing direction — the closest line to the trajectory start (entry) or end (exit) is selected | Should |
