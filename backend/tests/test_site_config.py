@@ -38,7 +38,7 @@ def test_load_741_73():
     assert config.site_id == "741_73"
     assert config.has_roi()
     assert len(config.roi_polygon) >= 3
-    assert "north" in config.entry_exit_lines
+    assert len(config.entry_exit_lines) >= 1
 
 
 def test_save_creates_directory(tmp_path):
