@@ -1,0 +1,774 @@
+"""CustomPipeline adapter — implements PipelineBackend Protocol.
+
+GPU-resident pipeline: NVDEC decode → CuPy preprocess → direct TRT
+inference → CPU NMS → BoT-SORT tracking → phase-routed analytics.
+"""
+
+import asyncio
+import logging
+import os
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from queue import Empty, Queue
+from typing import Callable
+
+import numpy as np
+
+from backend.pipeline.custom.decoder import NvDecoder
+from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES, TRTDetector
+from backend.pipeline.custom.engine_builder import ensure_engine
+from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu
+from backend.pipeline.custom.tracker import TrackerWrapper
+from backend.pipeline.direction import (
+    DirectionStateMachine,
+    LineSeg,
+    check_line_crossing,
+    classify_crossing,
+)
+from backend.pipeline.idle import IdleOptimizer
+from backend.pipeline.protocol import ChannelPhase, Detection, FrameResult
+from backend.pipeline.roi import point_in_polygon
+from backend.pipeline.snapshot import BestPhotoTracker
+from backend.pipeline.stitch import TrackStitcher
+from backend.pipeline.trajectory import TrajectoryBuffer
+
+logger = logging.getLogger(__name__)
+
+_MAX_PER_FRAME_DATA = 300  # ring buffer size per track
+
+
+@dataclass
+class _ChannelState:
+    """Per-channel mutable state."""
+
+    source: str
+    decoder: NvDecoder | None = None
+    tracker: TrackerWrapper | None = None
+    phase: ChannelPhase = ChannelPhase.SETUP
+    source_type: str = "file"
+    original_url: str | None = None
+    roi_polygon: list[tuple[float, float]] | None = None
+    entry_exit_lines: dict = field(default_factory=dict)
+    # Analytics state (created on Setup→Analytics)
+    active_tracks: dict[int, dict] = field(default_factory=dict)
+    stitcher: TrackStitcher | None = None
+    best_photo: BestPhotoTracker | None = None
+    idle_optimizer: IdleOptimizer | None = None
+    roi_centroid: tuple[float, float] | None = None
+    # Counters
+    frame_count: int = 0
+    infer_count: int = 0
+    inference_interval: int = 1  # 1 = every frame, 15 = idle
+    # Last frame for Phase 3 replay
+    last_frame_jpeg: bytes | None = None
+
+
+class CustomPipeline:
+    """GPU-resident custom pipeline implementing PipelineBackend Protocol."""
+
+    def __init__(self):
+        self.channels: dict[int, str] = {}
+        self._states: dict[int, _ChannelState] = {}
+        self._detector: TRTDetector | None = None
+        self._preprocess = GpuPreprocessor()
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # Callbacks
+        self._frame_callback: Callable | None = None
+        self._alert_callback: Callable | None = None
+        self._track_ended_callback: Callable | None = None
+        self._phase_callback: Callable | None = None
+        # Thread-safe transition queue
+        self._transition_queue: Queue = Queue()
+
+    # -- Lifecycle --
+
+    def start(self) -> None:
+        """Boot pipeline: load TRT engine, start pipeline thread."""
+        if self._running:
+            return
+
+        # Capture asyncio loop for callbacks
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+        # Ensure TRT engine exists
+        engine_path = ensure_engine()
+        self._detector = TRTDetector(engine_path)
+
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._pipeline_loop, name="custom-pipeline", daemon=True,
+        )
+        self._thread.start()
+        logger.info("CustomPipeline started")
+
+    def stop(self) -> None:
+        """Stop pipeline, release all resources."""
+        if not self._running:
+            return
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=5.0)
+            self._thread = None
+
+        # Finalize all channels
+        for ch_id in list(self._states):
+            self._finalize_channel_state(ch_id)
+            state = self._states[ch_id]
+            if state.decoder:
+                state.decoder.release()
+                state.decoder = None
+
+        self._states.clear()
+        self.channels.clear()
+        self._detector = None
+        logger.info("CustomPipeline stopped")
+
+    # -- Channel management --
+
+    def add_channel(
+        self,
+        channel_id: int,
+        source: str,
+        *,
+        source_type: str = "file",
+        original_url: str | None = None,
+    ) -> None:
+        if channel_id in self.channels:
+            raise ValueError(f"Channel {channel_id} already exists")
+
+        self.channels[channel_id] = source
+        state = _ChannelState(
+            source=source,
+            source_type=source_type,
+            original_url=original_url,
+        )
+        self._states[channel_id] = state
+
+        # Queue decoder creation for pipeline thread
+        self._transition_queue.put(("add", channel_id))
+        logger.info("Channel %d queued for add: %s", channel_id, source)
+
+    def remove_channel(self, channel_id: int) -> None:
+        if channel_id not in self.channels:
+            return
+        self._transition_queue.put(("remove", channel_id))
+
+    def configure_channel(
+        self,
+        channel_id: int,
+        roi_polygon: list[tuple[float, float]],
+        entry_exit_lines: dict,
+    ) -> None:
+        if channel_id not in self._states:
+            raise KeyError(f"Channel {channel_id} not found")
+        state = self._states[channel_id]
+        state.roi_polygon = roi_polygon
+        state.entry_exit_lines = entry_exit_lines
+
+    def set_channel_phase(self, channel_id: int, phase: ChannelPhase) -> None:
+        if channel_id not in self.channels:
+            raise KeyError(f"Channel {channel_id} not found")
+        self._transition_queue.put(("phase", channel_id, phase))
+
+    def get_channel_phase(self, channel_id: int) -> ChannelPhase:
+        if channel_id not in self._states:
+            raise KeyError(f"Channel {channel_id} not found")
+        return self._states[channel_id].phase
+
+    def get_channel_config(self, channel_id: int) -> dict:
+        if channel_id not in self._states:
+            raise KeyError(f"Channel {channel_id} not found")
+        state = self._states[channel_id]
+        return {"entry_exit_lines": state.entry_exit_lines or {}}
+
+    # -- Configuration --
+
+    def set_confidence_threshold(self, threshold: float) -> None:
+        if self._detector:
+            self._detector.set_confidence_threshold(threshold)
+
+    def set_inference_interval(self, interval: int) -> None:
+        # Applied per-channel via idle optimizer
+        pass
+
+    # -- Callbacks --
+
+    def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
+        self._frame_callback = callback
+
+    def register_alert_callback(self, callback: Callable[[dict], None]) -> None:
+        self._alert_callback = callback
+
+    def register_track_ended_callback(self, callback: Callable[[dict], None]) -> None:
+        self._track_ended_callback = callback
+
+    def register_phase_callback(self, callback: Callable) -> None:
+        self._phase_callback = callback
+
+    # -- Data access --
+
+    def get_snapshot(self, track_id: int) -> bytes | None:
+        for state in self._states.values():
+            if state.best_photo:
+                crop = state.best_photo.best_crops.get(track_id)
+                if crop is not None:
+                    import cv2
+
+                    _, jpeg = cv2.imencode(
+                        ".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90],
+                    )
+                    return jpeg.tobytes()
+        return None
+
+    # -- Pipeline loop (runs on background thread) --
+
+    def _pipeline_loop(self):
+        """Main pipeline loop — decode, infer, track, analytics."""
+        while self._running:
+            self._drain_transitions()
+
+            # Find channels ready for processing
+            active = {}
+            for ch_id, state in list(self._states.items()):
+                if state.decoder is None:
+                    continue
+                if state.phase == ChannelPhase.REVIEW:
+                    continue
+
+                nv12, pts = state.decoder.read()
+                if nv12 is None:
+                    self._handle_eos(ch_id)
+                    continue
+
+                state.frame_count += 1
+                # Frame rate normalization: 60fps source → 30fps inference
+                if state.frame_count % 2 != 0:
+                    continue
+
+                # Idle optimization: skip inference if idle
+                if state.inference_interval > 1:
+                    if state.infer_count % state.inference_interval != 0:
+                        state.infer_count += 1
+                        continue
+
+                active[ch_id] = (nv12, pts, state)
+
+            if not active:
+                time.sleep(0.001)
+                continue
+
+            # Process each channel
+            for ch_id, (nv12, pts, state) in active.items():
+                t0 = time.monotonic()
+
+                # GPU preprocess
+                input_tensor, scale_info = self._preprocess(
+                    nv12, state.decoder.height, state.decoder.width,
+                )
+
+                # TRT inference + NMS
+                detections = self._detector.detect(input_tensor, scale_info)
+
+                # BoT-SORT tracking
+                tracks = state.tracker.update(detections)
+
+                infer_ms = (time.monotonic() - t0) * 1000
+                state.infer_count += 1
+
+                # Phase routing: always track, conditionally analyze
+                if state.phase == ChannelPhase.ANALYTICS:
+                    self._process_analytics(ch_id, state, tracks)
+
+                # Idle optimization update
+                if state.idle_optimizer:
+                    transition = state.idle_optimizer.update(
+                        num_detections=len(detections),
+                        num_active_tracks=len(state.active_tracks),
+                    )
+                    if transition:
+                        state.inference_interval = (
+                            state.idle_optimizer.recommended_interval
+                            if transition == "idle" else 1
+                        )
+                        mode = "IDLE" if transition == "idle" else "ACTIVE"
+                        logger.info(
+                            "Channel %d: %s mode (interval=%d)",
+                            ch_id, mode, state.inference_interval,
+                        )
+
+                # Frame callback (~15fps: every other inference frame)
+                if state.infer_count % 2 == 0 and self._frame_callback:
+                    self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
+
+                # Best-photo crop extraction
+                if state.best_photo and state.best_photo.pending_crops:
+                    import cupy as cp
+                    import cv2
+
+                    bgr_gpu = nv12_to_bgr_gpu(
+                        nv12, state.decoder.height, state.decoder.width,
+                    )
+                    frame_cpu = cp.asnumpy(bgr_gpu)
+                    state.best_photo.extract_crops(frame_cpu)
+
+    # -- Transition handling --
+
+    def _drain_transitions(self):
+        """Drain all pending transitions from the queue."""
+        while True:
+            try:
+                item = self._transition_queue.get_nowait()
+            except Empty:
+                break
+
+            action = item[0]
+            if action == "add":
+                self._do_add_channel(item[1])
+            elif action == "remove":
+                self._do_remove_channel(item[1])
+            elif action == "phase":
+                self._do_phase_transition(item[1], item[2])
+
+    def _do_add_channel(self, channel_id: int):
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        state.decoder = NvDecoder(state.source, loop=True)
+        state.tracker = TrackerWrapper()
+        state.stitcher = TrackStitcher()
+        state.idle_optimizer = IdleOptimizer()
+        logger.info("Channel %d: decoder + tracker created", channel_id)
+
+    def _do_remove_channel(self, channel_id: int):
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        self._finalize_channel_state(channel_id)
+        if state.decoder:
+            state.decoder.release()
+        self._states.pop(channel_id, None)
+        self.channels.pop(channel_id, None)
+        self._cleanup_channel_snapshots(channel_id)
+        logger.info("Channel %d: removed", channel_id)
+
+    def _do_phase_transition(self, channel_id: int, new_phase: ChannelPhase):
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        old_phase = state.phase
+
+        if new_phase == ChannelPhase.ANALYTICS:
+            # Finalize setup state
+            self._finalize_channel_state(channel_id)
+
+            # Recreate decoder without looping
+            if state.decoder:
+                state.decoder.release()
+            state.decoder = NvDecoder(state.source, loop=False)
+
+            # Fresh tracker
+            state.tracker = TrackerWrapper()
+            state.active_tracks.clear()
+            state.stitcher = TrackStitcher()
+            state.idle_optimizer = IdleOptimizer()
+            state.frame_count = 0
+            state.infer_count = 0
+            state.inference_interval = 1
+
+            # Best-photo tracker
+            state.best_photo = BestPhotoTracker()
+
+            # ROI centroid for direction inference
+            if state.roi_polygon and len(state.roi_polygon) >= 3:
+                n = len(state.roi_polygon)
+                state.roi_centroid = (
+                    sum(p[0] for p in state.roi_polygon) / n,
+                    sum(p[1] for p in state.roi_polygon) / n,
+                )
+            else:
+                state.roi_centroid = None
+
+            state.phase = ChannelPhase.ANALYTICS
+            logger.info("Channel %d: Setup → Analytics", channel_id)
+
+        elif new_phase == ChannelPhase.REVIEW:
+            self._finalize_channel_state(channel_id)
+            if state.decoder:
+                state.decoder.release()
+                state.decoder = None
+            state.phase = ChannelPhase.REVIEW
+            logger.info("Channel %d: Analytics → Review", channel_id)
+
+        else:
+            state.phase = new_phase
+
+        if old_phase != new_phase:
+            self._safe_callback(
+                self._phase_callback, channel_id, new_phase, old_phase,
+            )
+
+    def _handle_eos(self, channel_id: int):
+        """Handle end-of-stream for a channel."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+
+        if state.phase == ChannelPhase.ANALYTICS:
+            logger.info("Channel %d: EOS — transitioning to Review", channel_id)
+            self._do_phase_transition(channel_id, ChannelPhase.REVIEW)
+
+    # -- Analytics processing --
+
+    def _process_analytics(
+        self, channel_id: int, state: _ChannelState, tracks: list[dict],
+    ):
+        """Process tracks through direction/ROI/stitch/alert pipeline."""
+        lines = self._parse_lines(state.entry_exit_lines)
+        seen_track_ids = set()
+
+        for track in tracks:
+            tid = track["track_id"]
+            cx, cy = track["centroid"]
+            seen_track_ids.add(tid)
+
+            # ROI check
+            in_roi = (
+                point_in_polygon((cx, cy), state.roi_polygon)
+                if state.roi_polygon
+                else True
+            )
+
+            if tid not in state.active_tracks:
+                # New track — check stitcher for merge
+                match = state.stitcher.find_match(
+                    position=(cx, cy), frame_number=state.infer_count,
+                )
+                if match:
+                    traj = match["trajectory"]
+                    traj.append(cx, cy, state.infer_count)
+                    dsm = match["dsm"]
+                    logger.info(
+                        "Track #%d merged with lost #%d",
+                        tid, match["lost_track_id"],
+                    )
+                else:
+                    traj = TrajectoryBuffer()
+                    traj.append(cx, cy, state.infer_count)
+                    dsm = DirectionStateMachine()
+
+                pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
+                bbox = track["bbox"]
+                pfd.append({
+                    "frame": state.infer_count,
+                    "bbox": list(bbox),
+                    "centroid": [cx, cy],
+                    "confidence": round(track["confidence"], 3),
+                    "timestamp_ms": int(state.infer_count * (1000 / 30)),
+                })
+                state.active_tracks[tid] = {
+                    "label": track["class_name"],
+                    "first_frame": state.infer_count,
+                    "last_frame": state.infer_count,
+                    "trajectory": traj,
+                    "roi_active": in_roi,
+                    "dsm": dsm,
+                    "per_frame_data": pfd,
+                }
+            else:
+                ts = state.active_tracks[tid]
+                prev_traj = ts["trajectory"].get_full()
+                prev_cx, prev_cy = prev_traj[-1][0], prev_traj[-1][1]
+
+                ts["last_frame"] = state.infer_count
+                ts["trajectory"].append(cx, cy, state.infer_count)
+                bbox = track["bbox"]
+                ts["per_frame_data"].append({
+                    "frame": state.infer_count,
+                    "bbox": list(bbox),
+                    "centroid": [cx, cy],
+                    "confidence": round(track["confidence"], 3),
+                    "timestamp_ms": int(state.infer_count * (1000 / 30)),
+                })
+                ts["roi_active"] = in_roi
+
+                # Line crossing check
+                if in_roi and lines:
+                    self._check_crossings(
+                        channel_id, state, tid, (prev_cx, prev_cy), (cx, cy), lines,
+                    )
+
+                # Stagnant check
+                if in_roi:
+                    traj_full = ts["trajectory"].get_full()
+                    if ts["dsm"].check_stagnant(traj_full):
+                        logger.warning("STAGNANT: Track #%d", tid)
+                        if self._alert_callback:
+                            self._safe_callback(
+                                self._alert_callback,
+                                {
+                                    "type": "stagnant_alert",
+                                    "track_id": tid,
+                                    "label": ts["label"],
+                                    "position": (cx, cy),
+                                    "stationary_duration_frames": (
+                                        state.infer_count - ts["dsm"].stopped_since_frame
+                                    ),
+                                    "first_seen_frame": ts["first_frame"],
+                                    "last_seen_frame": state.infer_count,
+                                    "channel": channel_id,
+                                },
+                            )
+
+            # Best-photo scoring (ROI-active only)
+            if in_roi and state.best_photo:
+                bbox = track["bbox"]
+                area = bbox[2] * bbox[3]
+                state.best_photo.score(
+                    track_id=tid,
+                    area=area,
+                    confidence=track["confidence"],
+                    bbox=bbox,
+                )
+
+        # Expire stitcher tracks
+        for exp_tid, exp_state in state.stitcher.expire(state.infer_count):
+            self._finalize_lost_track(channel_id, state, exp_tid, exp_state, lines)
+
+        # Detect lost tracks
+        lost_ids = [
+            tid for tid in list(state.active_tracks) if tid not in seen_track_ids
+        ]
+        for tid in lost_ids:
+            ts = state.active_tracks.pop(tid)
+            lifetime = ts["last_frame"] - ts["first_frame"] + 1
+
+            if ts["roi_active"]:
+                state.stitcher.on_track_lost(
+                    track_id=tid,
+                    trajectory=ts["trajectory"],
+                    dsm=ts["dsm"],
+                    frame_number=state.infer_count,
+                )
+                state.stitcher.lost_tracks[tid]["label"] = ts["label"]
+                state.stitcher.lost_tracks[tid]["lifetime"] = lifetime
+                state.stitcher.lost_tracks[tid]["first_frame"] = ts["first_frame"]
+                state.stitcher.lost_tracks[tid]["per_frame_data"] = ts.get(
+                    "per_frame_data", [],
+                )
+            else:
+                if state.best_photo:
+                    snapshot_dir = os.path.join("snapshots", str(channel_id))
+                    state.best_photo.save(tid, snapshot_dir)
+                lost = {
+                    "track_id": tid,
+                    "label": ts["label"],
+                    "lifetime": lifetime,
+                    "trajectory": ts["trajectory"].get_full(),
+                    "roi_active": False,
+                    "direction_state": ts["dsm"].state.value,
+                }
+                self._safe_callback(self._track_ended_callback, lost)
+
+    def _check_crossings(
+        self,
+        channel_id: int,
+        state: _ChannelState,
+        track_id: int,
+        prev: tuple[float, float],
+        curr: tuple[float, float],
+        lines: dict[str, LineSeg],
+    ):
+        """Check if a track crossed any entry/exit line."""
+        for arm_id, line in lines.items():
+            direction = check_line_crossing(line, prev, curr)
+            if direction is None:
+                continue
+
+            crossing_type = classify_crossing(line, direction)
+            ts = state.active_tracks.get(track_id)
+            if ts is None:
+                continue
+
+            dsm = ts["dsm"]
+            alert = dsm.on_crossing(
+                arm_id,
+                line.label,
+                crossing_type,
+                trajectory=ts["trajectory"].get_full(),
+                arms=lines,
+                roi_centroid=state.roi_centroid,
+            )
+            if alert:
+                alert["track_id"] = track_id
+                alert["frame"] = state.infer_count
+                alert["label"] = ts["label"]
+                alert["channel"] = channel_id
+                alert["first_seen_frame"] = ts["first_frame"]
+                alert["last_seen_frame"] = ts["last_frame"]
+                alert["trajectory"] = ts["trajectory"].get_full()
+                alert["per_frame_data"] = ts.get("per_frame_data", [])
+                logger.info(
+                    "TRANSIT: Track #%d: %s -> %s (%s)",
+                    track_id,
+                    alert["entry_label"],
+                    alert["exit_label"],
+                    alert["method"],
+                )
+                self._safe_callback(self._alert_callback, alert)
+
+    def _finalize_lost_track(
+        self,
+        channel_id: int,
+        state: _ChannelState,
+        tid: int,
+        stitcher_state: dict,
+        lines: dict[str, LineSeg],
+    ):
+        """Finalize a track that expired from the stitcher."""
+        dsm = stitcher_state["dsm"]
+        trajectory = stitcher_state["trajectory"]
+        trajectory_full = trajectory.get_full()
+        label = stitcher_state.get("label", "unknown")
+        lifetime = stitcher_state.get("lifetime", 0)
+
+        # Save best photo
+        if state.best_photo:
+            snapshot_dir = os.path.join("snapshots", str(channel_id))
+            state.best_photo.save(tid, snapshot_dir)
+
+        # Direction inference
+        if lines:
+            alert = dsm.on_track_lost(
+                trajectory_full, lines, roi_centroid=state.roi_centroid,
+            )
+            if alert:
+                alert["track_id"] = tid
+                alert["frame"] = state.infer_count
+                alert["label"] = label
+                alert["channel"] = channel_id
+                alert["first_seen_frame"] = stitcher_state.get("first_frame", 0)
+                alert["last_seen_frame"] = state.infer_count
+                alert["trajectory"] = trajectory_full
+                alert["per_frame_data"] = stitcher_state.get("per_frame_data", [])
+                logger.info(
+                    "TRANSIT: Track #%d: %s -> %s (%s)",
+                    tid,
+                    alert["entry_label"],
+                    alert["exit_label"],
+                    alert["method"],
+                )
+                self._safe_callback(self._alert_callback, alert)
+
+        lost = {
+            "track_id": tid,
+            "label": label,
+            "lifetime": lifetime,
+            "trajectory": trajectory_full,
+            "roi_active": True,
+            "direction_state": dsm.state.value,
+        }
+        self._safe_callback(self._track_ended_callback, lost)
+
+    # -- Frame emission --
+
+    def _emit_frame(
+        self,
+        channel_id: int,
+        state: _ChannelState,
+        nv12,
+        tracks: list[dict],
+        infer_ms: float,
+        pts: int,
+    ):
+        """Build FrameResult and fire callback."""
+        # For P1, no annotated_jpeg (that's P2 — renderer)
+        # Build detection list
+        det_list = [
+            Detection(
+                track_id=t["track_id"],
+                class_name=t["class_name"],
+                bbox=t["bbox"],
+                confidence=t["confidence"],
+                centroid=t["centroid"],
+            )
+            for t in tracks
+        ]
+
+        result = FrameResult(
+            channel_id=channel_id,
+            frame_number=state.infer_count,
+            timestamp_ms=pts,
+            detections=det_list,
+            annotated_jpeg=None,  # P2
+            inference_ms=infer_ms,
+            phase=state.phase.value,
+        )
+        self._safe_callback(self._frame_callback, result)
+
+    # -- Helpers --
+
+    def _finalize_channel_state(self, channel_id: int):
+        """Finalize all pending tracks, save photos, disable callbacks."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+
+        lines = self._parse_lines(state.entry_exit_lines)
+
+        # Expire all stitcher tracks
+        if state.stitcher:
+            for tid, sstate in list(state.stitcher.lost_tracks.items()):
+                self._finalize_lost_track(channel_id, state, tid, sstate, lines)
+            state.stitcher.lost_tracks.clear()
+
+        # Save photos for remaining active tracks
+        if state.best_photo:
+            snapshot_dir = os.path.join("snapshots", str(channel_id))
+            for tid in list(state.active_tracks):
+                state.best_photo.save(tid, snapshot_dir)
+
+        state.active_tracks.clear()
+
+    def _cleanup_channel_snapshots(self, channel_id: int):
+        import shutil
+        from pathlib import Path
+
+        snapshot_dir = Path("snapshots") / str(channel_id)
+        if snapshot_dir.exists():
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
+
+    def _parse_lines(self, entry_exit_lines: dict) -> dict[str, LineSeg]:
+        """Parse entry_exit_lines dict to LineSeg objects."""
+        if not entry_exit_lines:
+            return {}
+        lines = {}
+        for arm_id, line_data in entry_exit_lines.items():
+            if isinstance(line_data, LineSeg):
+                lines[arm_id] = line_data
+            elif isinstance(line_data, dict):
+                lines[arm_id] = LineSeg(
+                    start=tuple(line_data["start"]),
+                    end=tuple(line_data["end"]),
+                    label=line_data.get("label", arm_id),
+                    junction_side=line_data.get("junction_side", "left"),
+                )
+        return lines
+
+    def _safe_callback(self, callback, *args):
+        """Fire callback on asyncio loop if available, else direct."""
+        if callback is None:
+            return
+        try:
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(callback, *args)
+            else:
+                callback(*args)
+        except Exception as e:
+            logger.error("Callback error: %s", e)
