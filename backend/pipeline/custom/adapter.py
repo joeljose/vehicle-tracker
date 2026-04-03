@@ -20,6 +20,7 @@ from backend.pipeline.custom.decoder import NvDecoder
 from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES, TRTDetector
 from backend.pipeline.custom.engine_builder import ensure_engine
 from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu
+from backend.pipeline.custom.renderer import FrameRenderer
 from backend.pipeline.custom.tracker import TrackerWrapper
 from backend.pipeline.direction import (
     DirectionStateMachine,
@@ -73,6 +74,7 @@ class CustomPipeline:
         self._states: dict[int, _ChannelState] = {}
         self._detector: TRTDetector | None = None
         self._preprocess = GpuPreprocessor()
+        self._renderer = FrameRenderer()
         self._running = False
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -81,6 +83,10 @@ class CustomPipeline:
         self._alert_callback: Callable | None = None
         self._track_ended_callback: Callable | None = None
         self._phase_callback: Callable | None = None
+        # Stats tracking (per-channel, for stats_update broadcasts)
+        self._stats_last_time: dict[int, float] = {}
+        self._stats_frame_count: dict[int, int] = {}
+        self._stats_infer_sum: dict[int, float] = {}
         # Thread-safe transition queue
         self._transition_queue: Queue = Queue()
 
@@ -687,9 +693,21 @@ class CustomPipeline:
         infer_ms: float,
         pts: int,
     ):
-        """Build FrameResult and fire callback."""
-        # For P1, no annotated_jpeg (that's P2 — renderer)
-        # Build detection list
+        """Render annotated frame, build FrameResult, fire callback."""
+        # Render annotated JPEG
+        annotated_jpeg = self._renderer.render(
+            nv12,
+            state.decoder.height,
+            state.decoder.width,
+            tracks,
+            state.phase,
+            state.roi_polygon,
+            state.entry_exit_lines,
+        )
+
+        # Save as last frame for Phase 3 replay
+        state.last_frame_jpeg = annotated_jpeg
+
         det_list = [
             Detection(
                 track_id=t["track_id"],
@@ -706,7 +724,7 @@ class CustomPipeline:
             frame_number=state.infer_count,
             timestamp_ms=pts,
             detections=det_list,
-            annotated_jpeg=None,  # P2
+            annotated_jpeg=annotated_jpeg,
             inference_ms=infer_ms,
             phase=state.phase.value,
         )
