@@ -1730,12 +1730,16 @@ vehicle-tracker/
 │   └── package.json
 ├── docs/
 │   ├── prd.md
-│   └── design.md
-└── data/
-    └── videos/
-        ├── 741_73/
-        ├── 741_lytle_south/
-        └── drugmart_73/
+│   ├── design.md
+│   ├── changelog.md
+│   └── spikes/
+├── scripts/
+│   └── draw_config.py
+├── plans/
+├── experiments/
+└── data_collection/
+    ├── site_videos/
+    └── test_clips/
 ```
 
 ---
@@ -1756,12 +1760,14 @@ git tag v0.2.0    →  version = "0.2.0"
 
 | Milestone | Version | Significance |
 |---|---|---|
-| M1-M2 | 0.1.0 | First working pipeline (DeepStream, single channel, alerts) |
-| M3-M4 | 0.2.0 | API + UI working end-to-end |
-| M5-M6 | 0.3.0 | Full workflow (setup, analytics, review with replay) |
-| M7-M8 | 0.4.0 | Multi-channel + YouTube Live |
-| M9 | 0.5.0 | Custom pipeline alternative |
-| M10 | 1.0.0 | Production-ready release |
+| M1 | 0.1.0 | DeepStream pipeline — single-channel file input |
+| M2 | 0.2.0 | API layer — FastAPI REST/WS/MJPEG |
+| M3 | 0.3.0 | React UI — 4-phase workflow |
+| M4 | 0.4.0 | DeepStream-FastAPI integration |
+| M5 | 0.5.0 | Multi-channel shared pipeline |
+| M6 | 0.6.0 | YouTube Live streams |
+| M7 | 0.7.0 | Custom pipeline (NVDEC + TensorRT + ByteTrack) |
+| M8 | 0.8.0 | Polish (trajectory overlay, profiling, error handling) |
 
 ### Release Mechanism: Docker on GitHub Container Registry
 
@@ -1916,7 +1922,7 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | **M2** | API layer | FastAPI REST + WebSocket + MJPEG endpoints. In-memory AlertStore. PipelineBackend Protocol. Pipeline controllable from curl, MJPEG viewable in browser. 237 tests. **COMPLETE (v0.2.0).** |
 | **M3** | React UI | Video panels (MJPEG), alert feed sidebar, stats bar, phase controls, ROI polygon + entry/exit line drawing tools, site config save/load, WebSocket integration. 286 tests. **COMPLETE (v0.3.0).** |
 | **M4** | DeepStream-FastAPI integration | DeepStreamPipeline adapter (PipelineBackend Protocol), per-channel pipeline lifecycle, MjpegExtractor for GPU->JPEG, real-time alerts, clip extraction for replay, EOS auto-transition. 312 tests. **COMPLETE (v0.4.0).** |
-| **M5** | Multi-channel | Single process, nvstreammux batching, independent per-channel phases |
-| **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, stream recovery logic (circuit breaker, serialized yt-dlp calls), last-frame buffer for Phase 3 replay |
+| **M5** | Multi-channel | Shared pipeline: nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG. Dynamic source add/remove. BatchMetadataRouter. Per-source EOS. 336 tests. **COMPLETE (v0.5.0).** |
+| **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, stream recovery with circuit breaker, serialized yt-dlp calls, last-frame buffer for Phase 3 frozen-frame replay. 371 tests. **COMPLETE (v0.6.0).** |
 | **M7** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
 | **M8** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |

@@ -138,7 +138,7 @@ vehicle-tracker/
       snapshot.py        # Best-photo capture
       clip_extractor.py  # ffmpeg clip extraction for replay
       fake.py            # Test backend (no GPU needed)
-    tests/               # 363 tests
+    tests/               # 371 tests
     main.py              # FastAPI app factory
     Dockerfile
   frontend/
@@ -147,6 +147,10 @@ vehicle-tracker/
       components/        # AlertFeed, ReplayView, DrawingCanvas, StatsBar
       contexts/          # React Context state management
       api/               # REST + WebSocket clients
+  docs/                  # PRD, design doc, changelog, spike results
+  scripts/               # Developer utility scripts (draw_config.py)
+  plans/                 # Milestone implementation plans
+  experiments/           # Pipeline validation experiments + results
   config/deepstream/     # DeepStream model configs
   data_collection/       # Test clips + site videos (gitignored)
   models/                # TensorRT engines (gitignored)
@@ -173,9 +177,9 @@ vehicle-tracker/
 
 ## Documentation
 
-- [Product Requirements Document](prd.md)
-- [Design Document](vehicle_tracker_design.md)
-- [Changelog](CHANGELOG.md)
+- [Product Requirements Document](docs/prd.md)
+- [Design Document](docs/design.md)
+- [Changelog](docs/changelog.md)
 
 ## License
 

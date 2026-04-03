@@ -17,7 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `GET /channel/{id}/last_frame` endpoint for Phase 3 replay image
 - "Live" badge with red pulse indicator on channel cards for YouTube sources
 - yt-dlp + deno precompiled binaries in Dockerfile for YouTube JS extraction
-- Validation spike results documented in `docs/m6-spike-results.md`
+- Validation spike results documented in `docs/spikes/m6-spike-results.md`
 
 ### Changed
 - `add_channel()` now accepts `source_type` and `original_url` kwargs (Protocol + all backends)
