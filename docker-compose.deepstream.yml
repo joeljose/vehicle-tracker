@@ -1,5 +1,6 @@
 services:
   backend:
+    image: vehicle_tracker-backend-deepstream:latest
     build:
       context: ./backend
       dockerfile: Dockerfile.deepstream

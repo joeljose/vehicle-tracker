@@ -1,5 +1,6 @@
 services:
   backend:
+    image: vehicle_tracker-backend-custom:latest
     build:
       context: ./backend
       dockerfile: Dockerfile.custom
