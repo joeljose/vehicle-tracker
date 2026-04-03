@@ -29,9 +29,19 @@ RUN curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     chmod +x /usr/local/bin/deno && \
     rm /tmp/deno.zip
 
-# Python dependencies
+# Python dependencies — installed in stages to control size:
+# 1. Shared + lightweight deps
+# 2. CPU-only PyTorch (BOTSORT import dependency, ~200 MB vs 1.2 GB GPU)
+# 3. GPU packages with --no-deps (avoid duplicate CUDA pip libs)
 COPY requirements.custom.txt /tmp/requirements.txt
 RUN pip3 install --quiet --break-system-packages -r /tmp/requirements.txt && \
+    pip3 install --quiet --break-system-packages \
+      torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip3 install --quiet --break-system-packages --no-deps \
+      ultralytics>=8.4.0 \
+      tensorrt_cu13==10.16.0.72 \
+      tensorrt_cu13_bindings==10.16.0.72 \
+      tensorrt_cu13_libs==10.16.0.72 && \
     rm /tmp/requirements.txt
 
 WORKDIR /app
