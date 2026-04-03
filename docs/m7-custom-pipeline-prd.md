@@ -1,8 +1,8 @@
 # Product Requirements Document
 ## M7 — Custom Pipeline (NVDEC + TensorRT + BoT-SORT)
 
-**Version:** 0.1
-**Status:** Draft
+**Version:** 0.2
+**Status:** Draft (updated after grill session)
 **Last updated:** April 2026
 **Parent project:** Vehicle Tracker (v0.6.0)
 **Target version:** v0.7.0
@@ -11,7 +11,7 @@
 
 ## 1. Purpose
 
-Build an alternative vehicle tracking pipeline that replaces DeepStream's proprietary GStreamer elements with open, Python-native components: NVDEC hardware decoding via PyNvVideoCodec, YOLOv8s inference via TensorRT, and BoT-SORT multi-object tracking.
+Build an alternative vehicle tracking pipeline that replaces DeepStream's proprietary GStreamer elements with open, Python-native components: NVDEC hardware decoding, YOLOv8s inference via direct TensorRT API, and BoT-SORT multi-object tracking — with a GPU-resident data flow that minimizes PCIe transfers.
 
 The custom pipeline implements the same `PipelineBackend` Protocol as the DeepStream adapter. The FastAPI layer, React frontend, and all downstream consumers are unaware which pipeline is running. Backend selection is a startup-time configuration choice.
 
@@ -26,16 +26,18 @@ The DeepStream pipeline (M1-M6) works well but has significant drawbacks:
 3. **Limited flexibility:** Adding custom processing stages (e.g., vehicle color extraction, plate detection) requires writing GStreamer plugins in C/C++ or fighting with the probe-based Python API.
 4. **Fragile upgrades:** DeepStream 8.0 requires driver ≥580.x, DeepStream 9.0 requires ≥590.x. Version upgrades cascade through the entire stack.
 
-The custom pipeline solves these by using standard, well-documented Python libraries (Ultralytics, PyNvVideoCodec) that run on any CUDA-capable GPU without a 37 GB container.
+The custom pipeline solves these by using standard, well-documented Python libraries (TensorRT, PyNvVideoCodec, CuPy) that run on any CUDA-capable GPU without a 37 GB container. The pipeline keeps frames on the GPU from decode through inference, matching DeepStream's GPU-resident data flow without DeepStream's proprietary stack.
 
 ---
 
 ## 3. Goals
 
 - Implement `PipelineBackend` Protocol with identical behavior to the DeepStream adapter
-- Use OpenCV VideoCapture for video decoding (780fps at 1080p, validated in exp09)
-- Use YOLOv8s TensorRT FP16 for detection via Ultralytics
-- Use BoT-SORT (via Ultralytics) for multi-object tracking with ReID
+- GPU-resident data flow: NVDEC decode → GPU preprocess → direct TensorRT inference → GPU NMS — frame never leaves GPU until MJPEG output
+- Use NVDEC hardware decoder (via PyNvVideoCodec) for video decoding — frames stay as CUDA surfaces
+- Use YOLOv8s TensorRT FP16 for detection via direct TensorRT Python API (no Ultralytics wrapper)
+- Use standalone BoT-SORT for multi-object tracking on CPU (operates on bbox coords only, ~1KB per frame)
+- Only GPU→CPU transfer per frame: bbox array (~1KB) for tracking + analytics
 - Batch inference across channels (batch=N for N active channels)
 - Reuse all shared pipeline modules: direction FSM, ROI filtering, alerts, snapshots, trajectory, stitch, idle optimization
 - Pass all existing tests that use FakeBackend (API/WebSocket contract tests)
@@ -81,30 +83,46 @@ else:
 ### 5.2 Pipeline Topology
 
 ```
-Per-channel decode (OpenCV VideoCapture)
-  ch0: cv2.VideoCapture(source) → numpy frame
-  ch1: cv2.VideoCapture(source) → numpy frame
-         │                    │
-         ▼                    ▼
-  ┌──────────────────────────────────┐
-  │  Batch: stack frames → (N,3,640,640)  │
-  │  TensorRT inference (YOLOv8s FP16)     │
-  │  Split results per channel              │
-  └──────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-  Per-channel tracking (BoT-SORT)
-  ch0: tracker.update(dets)   ch1: tracker.update(dets)
-         │                    │
-         ▼                    ▼
-  Per-channel post-processing (shared modules)
-  ├── ROI filtering (roi.py)
-  ├── Direction FSM (direction.py)
-  ├── Best-photo scoring (snapshot.py)
-  ├── Stagnation detection (idle.py)
-  ├── Track stitching (stitch.py)
-  └── Alert generation → callbacks
+GPU ─────────────────────────────────────────────────────────────
+  Per-channel NVDEC decode (PyNvVideoCodec)
+    ch0: NVDEC → CUDA surface (NV12)
+    ch1: NVDEC → CUDA surface (NV12)
+           │                    │
+           ▼                    ▼
+    GPU preprocess (CuPy/CUDA kernel)
+      color convert (NV12→RGB) → resize → normalize → float32 tensor
+           │                    │
+           ▼                    ▼
+    ┌──────────────────────────────────────┐
+    │  Batch: stack GPU tensors → (N,3,640,640) │
+    │  TensorRT inference (YOLOv8s FP16)        │
+    │  EfficientNMS plugin (on-GPU NMS)         │
+    │  Split results per channel                │
+    └──────────────────────────────────────┘
+           │                    │
+           ▼                    ▼
+    bbox arrays (~1KB each) ─── only GPU→CPU transfer ───
+─────────────────────────────────────────────────────────────────
+CPU ─────────────────────────────────────────────────────────────
+    Per-channel tracking (standalone BoT-SORT, ~1ms)
+    ch0: tracker.update(dets)   ch1: tracker.update(dets)
+           │                    │
+           ▼                    ▼
+    Per-channel post-processing (shared modules, Phase 2 only)
+    ├── ROI filtering (roi.py)
+    ├── Direction FSM (direction.py)
+    ├── Best-photo scoring (snapshot.py)
+    ├── Stagnation detection (idle.py)
+    ├── Track stitching (stitch.py)
+    └── Alert generation → callbacks
+           │                    │
+           ▼                    ▼
+    MJPEG output (every other frame, ~15fps)
+      GPU→CPU frame download → OpenCV draw bboxes → cv2.imencode
+─────────────────────────────────────────────────────────────────
 ```
+
+**Key design:** Frames stay on GPU from decode through inference. The only GPU→CPU transfer per inference cycle is the bbox array (~1KB). For MJPEG frames (~15fps, every other inference frame), one full frame is downloaded to CPU for annotation and JPEG encoding. This matches DeepStream's GPU-resident pattern without the proprietary stack.
 
 ### 5.3 Threading Model
 
@@ -119,12 +137,17 @@ A dedicated pipeline thread reads frames from all channels' `cv2.VideoCapture` i
 
 ### 5.4 Component Selection
 
-| Component | Library | Version | Why |
-|-----------|---------|---------|-----|
-| Decode | OpenCV VideoCapture | ≥4.10 | 780 fps at 1080p (13x headroom over 60fps target). Handles files and URLs (HLS/RTSP) via ffmpeg backend. Returns numpy arrays directly. Already a dependency. Validated in exp09. |
-| Detection | Ultralytics + TensorRT | ≥8.3 | YOLOv8s FP16. Batch inference. Built-in NMS. Well-documented. |
-| Tracking | BoT-SORT (no ReID, no GMC) via Ultralytics | Built-in | Kalman filter association only. 103.6 fps TensorRT (validated exp10). ReID disabled (per-crop bottleneck, 16.3 fps). GMC disabled (58.5% cost, zero benefit on fixed cameras). 48 IDs vs ByteTrack's 50. |
-| Frame rendering | OpenCV | ≥4.10 | Draw bboxes, encode JPEG for MJPEG stream. Already a dependency. |
+| Component | Library | Why |
+|-----------|---------|-----|
+| Decode | PyNvVideoCodec (NVDEC) | Hardware decode to CUDA surface — frame never touches CPU. Handles files via demuxer. HLS/RTSP TBD (spike). |
+| GPU preprocess | CuPy | NV12→RGB color conversion, resize, normalize on GPU. No CPU round-trip. |
+| Detection | TensorRT Python API (direct) | YOLOv8s FP16 engine. Direct GPU tensor in/out. No Ultralytics wrapper overhead or CPU↔GPU bouncing. |
+| NMS | TensorRT EfficientNMS plugin | Baked into the TRT engine at export. Outputs final boxes on GPU. |
+| Tracking | Standalone BoT-SORT (no ReID, no GMC) | Kalman + Hungarian on CPU. Operates on bbox coords only (~1KB). 103.6 fps validated in exp10. Imported from ultralytics.trackers or reimplemented. |
+| Frame rendering | OpenCV | Draw bboxes on CPU numpy frame, encode JPEG via cv2.imencode. Only for MJPEG output frames (~15fps). |
+| Best-photo crop | CuPy or CPU | Crop region from CUDA surface (GPU) or download frame to CPU for crop. TBD in spike. |
+
+**Dropped from v0.1 PRD:** Ultralytics as inference/tracking wrapper. The high-level `model.track()` API forces CPU↔GPU round-trips every frame, limiting 2-channel throughput to 18.75 fps/channel (below 30fps target). Direct TensorRT + standalone tracker eliminates this bottleneck.
 
 ---
 
@@ -177,18 +200,21 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| C-01 | Decode video using OpenCV VideoCapture (unified path for files and HLS URLs) | Must |
-| C-02 | Support file sources (mp4, mkv, avi) and HLS streams (YouTube Live) | Must |
+| C-01 | Decode video using NVDEC hardware decoder (PyNvVideoCodec) — frames stay as CUDA surfaces | Must |
+| C-02 | Support file sources (mp4, mkv, avi) via PyNvVideoCodec demuxer | Must |
+| C-02a | Support HLS streams (YouTube Live) — PyNvVideoCodec or OpenCV fallback (spike TBD) | Must |
 | C-03 | Normalize all sources to 30fps for inference | Must |
 | C-04 | File sources loop in SETUP phase, play once in ANALYTICS | Must |
 | C-05 | Detect end-of-stream (EOS) for file sources and trigger auto-transition to REVIEW | Must |
-| C-06 | ffmpeg subprocess as fallback decoder if OpenCV has issues with specific stream types | Should |
+| C-06 | OpenCV VideoCapture as fallback decoder for sources NVDEC can't handle | Should |
 
 ### 7.2 Detection
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| C-07 | Run YOLOv8s TensorRT FP16 inference via Ultralytics | Must |
+| C-07 | Run YOLOv8s TensorRT FP16 inference via direct TensorRT Python API (no Ultralytics wrapper) | Must |
+| C-07a | Export YOLOv8s engine with EfficientNMS plugin baked in (NMS on GPU) | Must |
+| C-07b | GPU preprocess: NV12→RGB color convert, resize to 640x640, normalize — all on GPU via CuPy | Must |
 | C-08 | Batch inference across active channels (batch=N) | Must |
 | C-09 | Support runtime confidence threshold changes | Must |
 | C-10 | Support runtime inference interval changes (idle optimization) | Must |
@@ -198,7 +224,7 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| C-12 | Track objects using BoT-SORT (without ReID) via Ultralytics | Must |
+| C-12 | Track objects using standalone BoT-SORT (no ReID, no GMC) on CPU | Must |
 | C-13 | Per-channel tracker instances (no cross-channel ID collisions) | Must |
 | C-14 | Map tracker IDs to sequential integers (1, 2, 3...) | Must |
 | C-15 | Reset tracker on SETUP→ANALYTICS transition (fresh IDs) | Must |
@@ -251,11 +277,12 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | Metric | Target | Rationale |
 |--------|--------|-----------|
-| Inference FPS (single channel) | ≥ 30 fps | Real-time requirement. Measured: 103.6 fps (3.4x headroom). |
-| Inference FPS (2 channels, batched) | ≥ 60 fps total | 30fps × 2 channels. 1.7x headroom at measured single-channel rate. |
-| Decode latency | < 5ms per frame | OpenCV VideoCapture: 1.3ms/frame measured in exp09 |
+| Inference FPS (single channel) | ≥ 30 fps | Real-time requirement. Must match DeepStream. |
+| Inference FPS (2 channels, batched) | ≥ 60 fps total | 30fps × 2 channels. DeepStream achieves this with GPU-resident flow. |
+| Decode latency | < 5ms per frame | NVDEC hardware decode should be faster than OpenCV's 1.3ms (exp09). |
 | End-to-end latency (decode → alert) | < 100ms | Alert delivery NF-05 in parent PRD |
-| VRAM usage (2 channels) | < 1 GB | YOLOv8s FP16 (~380 MB) + tracker state. No GPU decode buffers (CPU decode). Well within 6 GB. |
+| GPU→CPU transfer per inference frame | ~1 KB | Bbox array only. Full frame download only for MJPEG output (~15fps). |
+| VRAM usage (2 channels) | < 1 GB | YOLOv8s FP16 (~380 MB) + NVDEC surfaces + preprocess buffers. Well within 6 GB. |
 | MJPEG frame rate | ~15 fps | Matches DeepStream adapter |
 | Container image size | < 15 GB | Significantly smaller than DeepStream's 37 GB |
 
@@ -282,12 +309,12 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | Phase | Deliverable | Dependencies |
 |-------|-------------|--------------|
-| P0 — Spike: decode + infer | PyNvVideoCodec decodes test clip, TensorRT YOLOv8s runs inference, bboxes drawn on frame. Validates the tech stack works on RTX 4050. | None |
-| P1 — Single-channel adapter | `CustomPipeline` implements `PipelineBackend`. Single file source: decode → detect → track → ROI → direction → alerts. All shared modules integrated. FakeBackend tests pass. | P0 |
-| P2 — MJPEG + frame callbacks | Annotated JPEG generation, frame callback, MJPEG streaming to browser. Stats (FPS, tracks, inference time). | P1 |
+| P0 — Spike: GPU-resident pipeline | **Exp12:** NVDEC decode (PyNvVideoCodec) → GPU preprocess (CuPy) → direct TensorRT inference → EfficientNMS. Measure fps, latency, memory. Compare against exp11 baseline. **Exp13:** nvJPEG GPU encoding vs cv2.imencode. Validates GPU-resident tech stack on RTX 4050. | None |
+| P1 — Single-channel adapter | `CustomPipeline` implements `PipelineBackend`. Single file source: NVDEC decode → GPU infer → standalone BoT-SORT → ROI → direction → alerts. All shared modules integrated. FakeBackend tests pass. | P0 |
+| P2 — MJPEG + frame callbacks | Frame download for annotation, OpenCV draw, JPEG encode, frame callback, MJPEG streaming to browser. Stats (FPS, tracks, inference time). | P1 |
 | P3 — Multi-channel + batching | Batch inference for 2 channels. Per-channel trackers. Dynamic add/remove. Phase transitions per channel. | P2 |
-| P4 — YouTube Live + stream recovery | HLS stream support via PyNvVideoCodec. Source resolver integration. Stream recovery with circuit breaker. | P3 |
-| P5 — Integration + validation | Backend selection env var. Dockerfile updates. E2E validation on all 3 test clips + YouTube Live. Performance benchmarks. | P4 |
+| P4 — YouTube Live + stream recovery | HLS stream support (PyNvVideoCodec or OpenCV fallback). Source resolver integration. Stream recovery with circuit breaker. | P3 |
+| P5 — Integration + validation | Backend selection env var. Dockerfile updates. E2E validation on all 3 test clips + YouTube Live. Performance benchmarks. Container size optimization. | P4 |
 
 ---
 
@@ -295,12 +322,14 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| OpenCV VideoCapture fails on specific HLS streams | Low | Medium | Fall back to ffmpeg subprocess pipe for that source. Validated on local files in exp09 (780fps). HLS needs live stream validation in P0 spike. |
-| BoT-SORT (no ReID) has more ID switches than NvDCF at our junctions | Medium | Medium | Track stitcher handles ID switches. Tune track_buffer (up to 150 frames for 5s occlusion). BoT-SORT GMC + Kalman gave 48 IDs vs ByteTrack's 50 in exp10. |
-| YOLOv8s TensorRT batch inference latency exceeds 33ms | Low | High | Single-frame inference is ~5-8ms. Batch=2 should be <15ms. Benchmark in P0 spike. |
-| Ultralytics API doesn't expose per-frame tracking state cleanly | Medium | Medium | Use Ultralytics for model loading/export only. Run BoT-SORT tracker standalone (import from ultralytics.trackers). |
-| GPU memory contention between decode + inference + tracking | Low | Medium | NVDEC uses dedicated hardware (not CUDA cores). YOLOv8s FP16 uses ~380 MB. Total should be well under 6 GB. |
-| DeepStream container already has ultralytics dependency conflicts | Medium | Medium | Test dependency installation in P0 spike. If conflicts, use separate pip virtual env or resolve version pins. |
+| PyNvVideoCodec not available or broken in DeepStream container | Medium | High | Fall back to cv2.cudacodec.VideoReader (OpenCV CUDA decode). If neither works, OpenCV CPU decode + GPU upload is the worst-case fallback. Test in P0 spike. |
+| PyNvVideoCodec can't handle HLS streams | Medium | Medium | Use OpenCV VideoCapture for HLS/YouTube Live sources, NVDEC for local files. Hybrid decode strategy. |
+| Direct TensorRT API complexity (engine loading, bindings, pre/post-processing) | Medium | Medium | Well-documented API. Many reference implementations. Export engine with EfficientNMS to simplify postprocessing. Spike validates feasibility. |
+| EfficientNMS plugin export fails or behaves differently | Low | Medium | Fall back to CuPy NMS on GPU, or worst-case CPU NMS (still fast at <100 detections per frame). |
+| BoT-SORT standalone import from ultralytics.trackers has hidden dependencies | Medium | Medium | Reimplement Kalman + Hungarian from scratch if import is too tangled — it's ~200 lines of well-understood code. |
+| GPU memory contention between NVDEC + inference | Low | Medium | NVDEC uses dedicated hardware (not CUDA cores). YOLOv8s FP16 uses ~380 MB. exp11 measured 152 MB for 2-channel. Well within 6 GB. |
+| NV12→RGB color conversion adds GPU overhead | Low | Low | Standard CUDA kernel, well-optimized in CuPy. Negligible vs inference time. |
+| CuPy preprocess (resize + normalize) produces different results than Ultralytics preprocess | Medium | Medium | Must match letterbox padding + normalization exactly. Validate by comparing TRT outputs with identical input frame. |
 
 ---
 
@@ -312,17 +341,18 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 backend/pipeline/custom/
   __init__.py              # already exists (empty)
   adapter.py               # CustomPipeline implementing PipelineBackend
-  decoder.py               # OpenCV VideoCapture wrapper (per-channel decode, files + HLS)
-  detector.py              # YOLOv8s TensorRT inference (batch-capable)
-  tracker.py               # BoT-SORT wrapper (per-channel tracking)
-  renderer.py              # OpenCV bbox drawing + JPEG encoding
+  decoder.py               # NVDEC decoder wrapper (PyNvVideoCodec, returns CUDA surfaces)
+  preprocess.py            # GPU preprocess: NV12→RGB, resize, normalize via CuPy
+  detector.py              # Direct TensorRT inference (batch-capable, GPU tensor in/out)
+  tracker.py               # Standalone BoT-SORT wrapper (CPU, bbox coords only)
+  renderer.py              # CPU bbox drawing + JPEG encoding (for MJPEG output)
 ```
 
 ### Modified files
 
 ```
-backend/Dockerfile         # add ultralytics to pip install (OpenCV already present)
-backend/requirements.txt   # add ultralytics
+backend/Dockerfile         # add cupy, pynvvideocodec to pip install
+backend/requirements.txt   # add cupy, pynvvideocodec
 backend/main.py            # backend selection via PIPELINE_BACKEND env var
 docker-compose.dev.yml     # add PIPELINE_BACKEND env var
 Makefile                   # optionally: make start-custom / make start-deepstream shortcuts
@@ -333,9 +363,10 @@ Makefile                   # optionally: make start-custom / make start-deepstre
 ```
 backend/tests/
   test_custom_adapter.py   # unit tests for CustomPipeline
-  test_custom_decoder.py   # decoder wrapper tests
-  test_custom_detector.py  # TensorRT inference tests
-  test_custom_tracker.py   # BoT-SORT wrapper tests
+  test_custom_decoder.py   # NVDEC decoder wrapper tests
+  test_custom_preprocess.py # GPU preprocess tests
+  test_custom_detector.py  # direct TensorRT inference tests
+  test_custom_tracker.py   # standalone BoT-SORT wrapper tests
   test_m7_integration.py   # E2E: custom pipeline on test clips
 ```
 
