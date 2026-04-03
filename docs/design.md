@@ -102,17 +102,18 @@ src_1 (nvurisrcbin, file-loop=varies) ──┘   (shared)     (shared)    (shar
 
 **Experimental validation (exp07-08):** 466 batches/10s, ~10fps MJPEG per channel, both channels flowing continuously. VRAM: +459 MB for 2 channels shared.
 
-### 3.2 Custom Pipeline
+### 3.2 Custom Pipeline (M7)
+
+**Full design:** [M7 Design Document](m7-design.md)
+
+GPU-resident pipeline: NVDEC decode to CUDA surfaces → CuPy GPU preprocess (NV12→RGB, resize, normalize) → direct TensorRT YOLOv8s FP16 inference → CPU-side NMS + BoT-SORT tracking → phase-routed analytics. Only GPU→CPU transfer per inference cycle is the bbox array (~1KB). MJPEG frames (~15fps) download one frame to CPU for annotation.
 
 ```
-Sources ---> NVDEC ---> batch ---> TensorRT ---> ByteTrack ---> [if/elif per channel phase] ---> annotator ---> output
+GPU:  NVDEC decode → CuPy preprocess → TRT inference → bbox download (1KB)
+CPU:  NMS → BoT-SORT → phase routing → analytics → MJPEG render
 ```
 
-- NVDEC hardware decode per source (one decode session per channel).
-- Frames batched and fed to TensorRT YOLOv8s INT8.
-- ByteTrack runs per-channel on CPU.
-- Phase routing is a simple `if/elif` block after inference, before post-processing.
-- CUDA annotation kernel draws overlays. Output encoded to MJPEG.
+Validated performance (exp12): 159.4 fps single-channel, 82.6 fps dual-channel (41.3 fps/ch). Meets 30fps target with 1.38x headroom. 210 MB GPU memory for dual channel.
 
 ### 3.3 Pipeline Interface Contract
 
