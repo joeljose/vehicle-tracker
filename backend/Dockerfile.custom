@@ -1,0 +1,37 @@
+# Custom pipeline development image
+# Lightweight CUDA runtime base with GStreamer for HLS decode.
+# ~6 GB vs 37.8 GB for the DeepStream image.
+
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System packages: Python, ffmpeg (clip extraction), GStreamer (HLS decode)
+RUN apt-get update -qq && \
+    apt-get install -y -qq \
+      python3.12 python3-pip python3.12-venv \
+      ffmpeg \
+      gstreamer1.0-tools \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good \
+      gstreamer1.0-plugins-bad \
+      libsoup-3.0-0 \
+      curl unzip > /dev/null 2>&1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# yt-dlp + deno (YouTube Live URL resolution)
+RUN curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp && \
+    curl -sL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+      -o /tmp/deno.zip && \
+    unzip -o -q /tmp/deno.zip -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/deno && \
+    rm /tmp/deno.zip
+
+# Python dependencies
+COPY requirements.custom.txt /tmp/requirements.txt
+RUN pip3 install --quiet --break-system-packages -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
+
+WORKDIR /app

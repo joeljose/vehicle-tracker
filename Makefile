@@ -5,7 +5,8 @@ SHELL := /bin/bash
 export DS_UID := $(shell id -u)
 export DS_GID := $(shell id -g)
 
-COMPOSE := docker compose -f docker-compose.dev.yml
+BACKEND_TYPE ?= custom
+COMPOSE := docker compose -f docker-compose.dev.yml -f docker-compose.$(BACKEND_TYPE).yml
 BACKEND := $(COMPOSE) exec backend
 FRONTEND := $(COMPOSE) exec frontend
 
@@ -22,13 +23,14 @@ FPS      ?= 30
 ## —— Setup & Lifecycle ——————————————————————————
 
 help: ## Show this help message
-	@echo "Usage: make <target>"
+	@echo "Usage: make <target> [BACKEND_TYPE=custom|deepstream]"
+	@echo "  Default backend: $(BACKEND_TYPE)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 setup: ## First-time setup: create .env, cache dirs, build images
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example")
-	@mkdir -p .ds-cache/.local .ds-cache/.cache .node-cache/.npm snapshots
+	@mkdir -p .ds-cache/.local .ds-cache/.cache .custom-cache/.local .custom-cache/.cache .node-cache/.npm snapshots
 	$(COMPOSE) build
 	@echo ""
 	@echo "Setup complete. Run 'make dev' to start containers."
@@ -36,7 +38,7 @@ setup: ## First-time setup: create .env, cache dirs, build images
 dev: ## Start dev containers (backend idle, frontend hot-reload)
 	$(COMPOSE) up -d
 	@echo ""
-	@echo "Containers started."
+	@echo "Containers started (backend=$(BACKEND_TYPE))."
 	@echo "  Backend:  run 'make start' to launch the server"
 	@echo "  Frontend: http://localhost:5173"
 
@@ -45,7 +47,7 @@ down: ## Stop all containers
 
 clean: ## Stop containers and remove caches, snapshots, build artifacts
 	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
-	rm -rf .ds-cache .node-cache snapshots frontend/.vite frontend/node_modules/.vite
+	rm -rf .ds-cache .custom-cache .node-cache snapshots frontend/.vite frontend/node_modules/.vite
 	@echo "Cleaned up. Run 'make setup' to start fresh."
 
 rebuild: ## Force rebuild Docker images (use after Dockerfile changes)
@@ -98,7 +100,7 @@ format: ## Run ruff format (auto-fix)
 ## —— Data & Debugging ————————————————————————————
 
 status: ## Show container status, server health, GPU memory
-	@echo "=== Containers ==="
+	@echo "=== Containers (backend=$(BACKEND_TYPE)) ==="
 	@$(COMPOSE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "No containers running"
 	@echo ""
 	@echo "=== Backend Server ==="

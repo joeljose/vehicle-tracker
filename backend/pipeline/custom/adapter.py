@@ -18,6 +18,7 @@ import numpy as np
 
 from backend.pipeline.custom.decoder import NvDecoder
 from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES, TRTDetector
+from backend.pipeline.stream_recovery import CircuitBreaker
 from backend.pipeline.custom.engine_builder import ensure_engine
 from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu
 from backend.pipeline.custom.renderer import FrameRenderer
@@ -89,6 +90,10 @@ class CustomPipeline:
         self._stats_infer_sum: dict[int, float] = {}
         # Thread-safe transition queue
         self._transition_queue: Queue = Queue()
+        # Stream recovery (YouTube Live)
+        self._circuit_breaker = CircuitBreaker()
+        self._recovering: set[int] = set()
+        self._ws_broadcaster = None
 
     # -- Lifecycle --
 
@@ -218,6 +223,14 @@ class CustomPipeline:
     def register_phase_callback(self, callback: Callable) -> None:
         self._phase_callback = callback
 
+    def register_ws_broadcaster(self, broadcaster) -> None:
+        """Register WS broadcaster for stream recovery notifications."""
+        self._ws_broadcaster = broadcaster
+
+    def _ws_enqueue(self, message: dict) -> None:
+        if self._ws_broadcaster is not None:
+            self._ws_broadcaster.enqueue(message)
+
     # -- Data access --
 
     def get_snapshot(self, track_id: int) -> bytes | None:
@@ -341,12 +354,17 @@ class CustomPipeline:
                 self._do_remove_channel(item[1])
             elif action == "phase":
                 self._do_phase_transition(item[1], item[2])
+            elif action == "reconnect":
+                self._do_reconnect_channel(item[1], item[2])
 
     def _do_add_channel(self, channel_id: int):
         state = self._states.get(channel_id)
         if state is None:
             return
-        state.decoder = NvDecoder(state.source, loop=True)
+        is_live = state.source_type == "youtube_live"
+        state.decoder = NvDecoder(
+            state.source, loop=not is_live, channel_id=channel_id,
+        )
         state.tracker = TrackerWrapper()
         state.stitcher = TrackStitcher()
         state.idle_optimizer = IdleOptimizer()
@@ -377,7 +395,9 @@ class CustomPipeline:
             # Recreate decoder without looping
             if state.decoder:
                 state.decoder.release()
-            state.decoder = NvDecoder(state.source, loop=False)
+            state.decoder = NvDecoder(
+                state.source, loop=False, channel_id=channel_id,
+            )
 
             # Fresh tracker
             state.tracker = TrackerWrapper()
@@ -426,9 +446,156 @@ class CustomPipeline:
         if state is None:
             return
 
+        if (
+            state.source_type == "youtube_live"
+            and state.phase == ChannelPhase.ANALYTICS
+            and channel_id not in self._recovering
+        ):
+            # YouTube: try recovery before giving up
+            self._trigger_recovery(channel_id, "decode returned None (HLS)")
+            return
+
         if state.phase == ChannelPhase.ANALYTICS:
             logger.info("Channel %d: EOS — transitioning to Review", channel_id)
             self._do_phase_transition(channel_id, ChannelPhase.REVIEW)
+
+    # -- Stream recovery (YouTube Live) --
+
+    def _trigger_recovery(self, channel_id: int, reason: str) -> None:
+        """Start async recovery for a YouTube Live channel."""
+        if channel_id in self._recovering:
+            return
+        self._recovering.add(channel_id)
+        logger.info(
+            "Channel %d: starting stream recovery (reason: %s)",
+            channel_id, reason[:100],
+        )
+        self._ws_enqueue({
+            "type": "pipeline_event",
+            "event": "stream_recovering",
+            "channel": channel_id,
+            "detail": "Stream interrupted, attempting recovery",
+        })
+        threading.Thread(
+            target=self._run_recovery, args=(channel_id,), daemon=True,
+        ).start()
+
+    def _run_recovery(self, channel_id: int) -> None:
+        """Recovery flow: retry → liveness → re-extract → reconnect or eject.
+
+        Runs in a background thread.
+        """
+        import asyncio as _asyncio
+
+        from backend.pipeline.source_resolver import (
+            check_stream_liveness,
+            re_extract_url,
+        )
+        from backend.pipeline.stream_recovery import RETRY_DELAYS
+
+        state = self._states.get(channel_id)
+        if state is None or state.original_url is None:
+            self._recovering.discard(channel_id)
+            return
+
+        original_url = state.original_url
+
+        # Step 1: Retry with backoff
+        for i, delay in enumerate(RETRY_DELAYS):
+            logger.info(
+                "Channel %d: retry %d/%d in %.0fs",
+                channel_id, i + 1, len(RETRY_DELAYS), delay,
+            )
+            time.sleep(delay)
+            if channel_id not in self._states:
+                self._recovering.discard(channel_id)
+                return
+
+        # Step 2: Check liveness
+        loop = _asyncio.new_event_loop()
+        try:
+            is_live = loop.run_until_complete(check_stream_liveness(original_url))
+        finally:
+            loop.close()
+
+        if not is_live:
+            logger.info(
+                "Channel %d: stream ended, transitioning to Review", channel_id,
+            )
+            self._recovering.discard(channel_id)
+            self._safe_callback(
+                self._do_phase_transition, channel_id, ChannelPhase.REVIEW,
+            )
+            return
+
+        # Step 3: Re-extract fresh HLS URL
+        logger.info("Channel %d: stream still live, re-extracting URL", channel_id)
+        loop = _asyncio.new_event_loop()
+        try:
+            new_url = loop.run_until_complete(re_extract_url(original_url))
+        except (ValueError, TimeoutError) as exc:
+            logger.warning("Channel %d: re-extraction failed: %s", channel_id, exc)
+            self._recovering.discard(channel_id)
+            self._on_recovery_failed(channel_id, str(exc))
+            return
+        finally:
+            loop.close()
+
+        # Step 4: Circuit breaker
+        self._circuit_breaker.record_rebuild(channel_id)
+        if self._circuit_breaker.is_tripped(channel_id):
+            logger.warning(
+                "Channel %d: circuit breaker tripped, ejecting", channel_id,
+            )
+            self._recovering.discard(channel_id)
+            self._safe_callback(self._eject_channel, channel_id)
+            return
+
+        # Step 5: Reconnect with fresh URL
+        logger.info("Channel %d: reconnecting with fresh URL", channel_id)
+        state = self._states.get(channel_id)
+        if state is not None:
+            state.source = new_url
+            self.channels[channel_id] = new_url
+        self._recovering.discard(channel_id)
+        self._transition_queue.put(("reconnect", channel_id, new_url))
+        self._ws_enqueue({
+            "type": "pipeline_event",
+            "event": "stream_recovered",
+            "channel": channel_id,
+            "detail": "Stream reconnected",
+        })
+
+    def _do_reconnect_channel(self, channel_id: int, new_url: str):
+        """Reconnect a channel's decoder with a fresh HLS URL."""
+        state = self._states.get(channel_id)
+        if state is None:
+            return
+        if state.decoder:
+            state.decoder.reconnect(new_url)
+        state.source = new_url
+        state.frame_count = 0
+        logger.info("Channel %d: decoder reconnected", channel_id)
+
+    def _on_recovery_failed(self, channel_id: int, error: str) -> None:
+        """Notify that stream recovery failed."""
+        self._ws_enqueue({
+            "type": "pipeline_event",
+            "event": "stream_recovery_failed",
+            "channel": channel_id,
+            "detail": f"Recovery failed: {error}",
+        })
+
+    def _eject_channel(self, channel_id: int) -> None:
+        """Eject a channel after circuit breaker trips — transition to Review."""
+        logger.warning("Channel %d: ejecting (circuit breaker)", channel_id)
+        self._do_phase_transition(channel_id, ChannelPhase.REVIEW)
+        self._ws_enqueue({
+            "type": "pipeline_event",
+            "event": "stream_recovery_failed",
+            "channel": channel_id,
+            "detail": "Circuit breaker tripped — too many reconnects",
+        })
 
     # -- Analytics processing --
 

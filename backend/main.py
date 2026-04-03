@@ -66,6 +66,10 @@ def create_app(backend: str = "deepstream") -> FastAPI:
         from backend.pipeline.deepstream.adapter import DeepStreamPipeline
 
         pipeline_backend = DeepStreamPipeline()
+    elif backend == "custom":
+        from backend.pipeline.custom.adapter import CustomPipeline
+
+        pipeline_backend = CustomPipeline()
     elif backend == "fake":
         from backend.pipeline.fake import FakeBackend
 
