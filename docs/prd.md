@@ -555,7 +555,8 @@ duration_ms, frames_stationary
 | M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. 336 tests. **COMPLETE (v0.5.0).** | M4 |
 | M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp` (async, best quality only), HLS stream consumption via `nvurisrcbin`, stream recovery with circuit breaker, serialized `yt-dlp` calls, last-frame buffer for Phase 3 frozen-frame replay. E2E validated on live 741 & Lytle South traffic camera. 371 tests. **COMPLETE (v0.6.0).** | M5 |
 | M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
-| M8 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M6 |
+| M8 -- Custom model training | Auto-label 5.2 hrs of junction video with YOLOv8x teacher, fine-tune YOLOv8s on 4 vehicle classes (car, truck, bus, motorcycle), export TensorRT FP16 engine. PRD and design doc at `training/docs/`. | M6 |
+| M9 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M8 |
 
 ---
 

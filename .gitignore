@@ -44,6 +44,12 @@ data_collection/site_videos/
 snapshots/
 exports/
 
+# Training data and runs
+training/data/*
+!training/data/.gitkeep
+training/runs/*
+!training/runs/.gitkeep
+
 # Environment
 .env
 .env.local
