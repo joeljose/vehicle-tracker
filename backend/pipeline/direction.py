@@ -99,6 +99,7 @@ class TrackState(Enum):
     IN_TRANSIT = "in_transit"
     WAITING = "waiting"
     STAGNANT = "stagnant"
+    COMPLETED = "completed"  # transit alert already fired
 
 
 def _point_to_segment_distance(
@@ -383,6 +384,7 @@ class DirectionStateMachine:
 
             self.exit_arm = arm_id
             self.exit_label = label
+            self.state = TrackState.COMPLETED
             return {
                 "entry_arm": self.entry_arm,
                 "entry_label": self.entry_label,
@@ -406,6 +408,7 @@ class DirectionStateMachine:
                 if inferred_entry and inferred_entry != arm_id:
                     self.entry_arm = inferred_entry
                     self.entry_label = arms[inferred_entry].label
+                    self.state = TrackState.COMPLETED
                     return {
                         "entry_arm": self.entry_arm,
                         "entry_label": self.entry_label,
