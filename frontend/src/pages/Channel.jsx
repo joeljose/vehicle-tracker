@@ -42,15 +42,19 @@ function PhaseIndicator({ current }) {
 function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps, lines, roi }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
+  const [streamKey, setStreamKey] = useState(0);
 
   useEffect(() => {
-    // Reset stream state on pipeline start or phase change
-    // (DeepStream rebuilds the GStreamer pipeline on phase transitions)
+    // Force MJPEG reconnect on phase change.
+    // DeepStream rebuilds the GStreamer pipeline on Setup→Analytics,
+    // which drops the MJPEG connection. The browser won't retry an
+    // MJPEG <img> automatically, so we cycle the src with a new key.
     setErrored(false);
     setLoaded(false);
+    setStreamKey((k) => k + 1);
   }, [pipelineStarted, phase]);
 
-  const streamUrl = `/api/stream/${channelId}`;
+  const streamUrl = `/api/stream/${channelId}?t=${streamKey}`;
 
   if (!pipelineStarted || errored) {
     return (
