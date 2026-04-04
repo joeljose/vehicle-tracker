@@ -20,7 +20,7 @@ from backend.pipeline.custom.decoder import NvDecoder
 from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES, TRTDetector
 from backend.pipeline.stream_recovery import CircuitBreaker
 from backend.pipeline.custom.engine_builder import ensure_engine
-from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu
+from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu, nv12_to_rgb_gpu
 from backend.pipeline.custom.renderer import FrameRenderer
 from backend.pipeline.custom.tracker import TrackerWrapper
 from backend.pipeline.direction import (
@@ -63,6 +63,9 @@ class _ChannelState:
     frame_count: int = 0
     infer_count: int = 0
     inference_interval: int = 1  # 1 = every frame, 15 = idle
+    # Frame pacing (file sources only — HLS is self-pacing)
+    next_frame_time: float = 0.0
+    frame_interval: float = 0.0  # seconds per frame (1/fps)
     # Last frame for Phase 3 replay
     last_frame_jpeg: bytes | None = None
 
@@ -276,6 +279,15 @@ class CustomPipeline:
                     self._handle_eos(ch_id)
                     continue
 
+                # Frame pacing: throttle file sources to native FPS
+                if state.frame_interval > 0:
+                    now = time.monotonic()
+                    if state.next_frame_time == 0.0:
+                        state.next_frame_time = now
+                    elif now < state.next_frame_time:
+                        time.sleep(state.next_frame_time - now)
+                    state.next_frame_time += state.frame_interval
+
                 state.frame_count += 1
                 # Frame rate normalization: 60fps source → 30fps inference
                 if state.frame_count % 2 != 0:
@@ -336,15 +348,14 @@ class CustomPipeline:
                 if state.infer_count % 2 == 0 and self._frame_callback:
                     self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
 
-                # Best-photo crop extraction
+                # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
                 if state.best_photo and state.best_photo.pending_crops:
                     import cupy as cp
-                    import cv2
 
-                    bgr_gpu = nv12_to_bgr_gpu(
+                    rgb_gpu = nv12_to_rgb_gpu(
                         nv12, state.decoder.height, state.decoder.width,
                     )
-                    frame_cpu = cp.asnumpy(bgr_gpu)
+                    frame_cpu = cp.asnumpy(rgb_gpu)
                     state.best_photo.extract_crops(frame_cpu)
 
     # -- Transition handling --
@@ -378,6 +389,9 @@ class CustomPipeline:
         state.tracker = TrackerWrapper()
         state.stitcher = TrackStitcher()
         state.idle_optimizer = IdleOptimizer()
+        # Frame pacing for file sources (HLS is self-pacing via network)
+        if not is_live and state.decoder.fps > 0:
+            state.frame_interval = 1.0 / state.decoder.fps
         logger.info("Channel %d: decoder + tracker created", channel_id)
 
     def _do_remove_channel(self, channel_id: int):
