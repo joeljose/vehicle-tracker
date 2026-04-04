@@ -851,6 +851,7 @@ class CustomPipeline:
             annotated_jpeg=annotated_jpeg,
             inference_ms=infer_ms,
             phase=state.phase.value,
+            idle_mode=state.idle_optimizer.is_idle if state.idle_optimizer else False,
         )
         self._safe_callback(self._frame_callback, result)
 
