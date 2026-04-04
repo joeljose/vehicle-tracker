@@ -8,9 +8,9 @@ TRACKER_CONFIG = "/app/config/deepstream/tracker_config.yml"
 TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 LABELS_FILE = "/app/config/deepstream/labels.txt"
 
-# Model paths (inside the DS container)
-MODEL_DIR = Path("/opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector")
-ONNX_MODEL = MODEL_DIR / "resnet18_trafficcamnet_pruned.onnx"
+# Model paths (inside the container)
+MODEL_DIR = Path("/app/models")
+ONNX_MODEL = MODEL_DIR / "yolov8s_nms.onnx"
 
 # Pipeline defaults
 DEFAULT_STREAMMUX_WIDTH = 1920

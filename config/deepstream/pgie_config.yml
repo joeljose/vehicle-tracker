@@ -1,17 +1,18 @@
 property:
   gpu-id: 0
   net-scale-factor: 0.00392156862745098
-  onnx-file: /opt/nvidia/deepstream/deepstream/samples/models/Primary_Detector/resnet18_trafficcamnet_pruned.onnx
-  model-engine-file: /app/models/trafficcamnet_fp16.engine
+  onnx-file: /app/models/yolov8s.onnx
+  model-engine-file: /app/models/yolov8s_ds.engine
   labelfile-path: /app/config/deepstream/labels.txt
   batch-size: 1
   network-mode: 2
-  num-detected-classes: 4
+  num-detected-classes: 80
   interval: 0
   gie-unique-id: 1
-  cluster-mode: 2
-
-class-attrs-all:
-  pre-cluster-threshold: 0.3
-  topk: 20
-  nms-iou-threshold: 0.5
+  cluster-mode: 4
+  infer-dims: 3;640;640
+  maintain-aspect-ratio: 1
+  symmetric-padding: 1
+  parse-func: 0
+  custom-lib-path: /app/backend/deepstream_parsers/libnvds_parse_yolov8.so
+  parse-bbox-func-name: NvDsInferParseYoloV8

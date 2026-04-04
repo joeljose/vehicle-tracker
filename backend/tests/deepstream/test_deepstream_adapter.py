@@ -33,7 +33,8 @@ def mock_psm(monkeypatch):
             "backend.pipeline.deepstream.adapter.TrackingReporter"
         ) as mock_reporter_cls,
         patch(
-            "backend.pipeline.deepstream.adapter.load_labels", return_value={0: "car"}
+            "backend.pipeline.deepstream.adapter.load_labels",
+            return_value={2: "car", 3: "motorcycle", 5: "bus", 7: "truck"},
         ),
         patch("backend.pipeline.deepstream.adapter.BestPhotoTracker"),
         patch("backend.pipeline.deepstream.batch_router.BatchMetadataRouter"),

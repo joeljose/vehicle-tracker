@@ -29,11 +29,12 @@ def test_config_loads_labels():
     from backend.pipeline.deepstream.config import load_labels
 
     labels = load_labels()
-    assert labels[0] == "car"
-    assert labels[1] == "bicycle"
-    assert labels[2] == "person"
-    assert labels[3] == "road_sign"
-    assert len(labels) == 4
+    assert labels[0] == "person"
+    assert labels[2] == "car"
+    assert labels[3] == "motorcycle"
+    assert labels[5] == "bus"
+    assert labels[7] == "truck"
+    assert len(labels) == 80
 
 
 def test_pipeline_detects_vehicles():

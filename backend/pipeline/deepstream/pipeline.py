@@ -2,7 +2,7 @@
 
 Builds a GStreamer pipeline via pyservicemaker that:
   1. Decodes a video file (nvurisrcbin via Flow API)
-  2. Runs TrafficCamNet inference (nvinfer)
+  2. Runs YOLOv8s inference (nvinfer with EfficientNMS)
   3. Tracks vehicles with NvDCF (nvtracker) — persistent IDs
   4. Draws bounding boxes with track IDs (nvdsosd)
   5. Optionally encodes annotated output to MP4 (nvv4l2h264enc)
@@ -36,6 +36,9 @@ from backend.pipeline.trajectory import TrajectoryBuffer
 
 # Max per-frame data entries per track (matches TrajectoryBuffer default)
 _MAX_PER_FRAME_DATA = 300
+
+# COCO vehicle class IDs (matching Custom backend)
+VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +129,10 @@ class TrackingReporter(BatchMetadataOperator):
                 seen_track_ids = set()
 
                 for obj_meta in frame_meta.object_items:
+                    # Filter to vehicle classes only (COCO: car, motorcycle, bus, truck)
+                    if obj_meta.class_id not in VEHICLE_CLASS_IDS:
+                        continue
+
                     frame_detections += 1
                     label = self.labels.get(
                         obj_meta.class_id, f"class_{obj_meta.class_id}"
