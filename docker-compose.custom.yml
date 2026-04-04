@@ -1,0 +1,28 @@
+services:
+  backend:
+    image: vehicle_tracker-backend-custom:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.custom
+    runtime: nvidia
+    user: "${DS_UID}:${DS_GID}"
+    volumes:
+      - ./backend:/app/backend
+      - ./config:/app/config
+      - ./data_collection:/data
+      - ./snapshots:/app/snapshots
+      - ./experiments:/app/experiments
+      - ./models:/app/models
+      - ./.custom-cache:/home/custom
+    ports:
+      - "8000:8000"
+    working_dir: /app
+    command: ["tail", "-f", "/dev/null"]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - HOME=/home/custom
+      - PATH=/home/custom/.local/bin:/usr/local/bin:/usr/bin:/bin
+      - VT_BACKEND=custom
+    stdin_open: true
+    tty: true

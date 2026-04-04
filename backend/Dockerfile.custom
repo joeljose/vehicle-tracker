@@ -1,0 +1,56 @@
+# Custom pipeline image
+# Lightweight CUDA runtime base with GStreamer for HLS decode.
+
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# System packages: Python, ffmpeg (clip extraction), GStreamer (HLS decode)
+# curl/unzip needed only during build — removed at end of this layer
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends \
+      python3.12 python3-pip \
+      ffmpeg \
+      gstreamer1.0-tools \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good \
+      gstreamer1.0-plugins-bad \
+      libsoup-3.0-0 \
+      curl unzip > /dev/null 2>&1 && \
+    # yt-dlp + deno (YouTube Live URL resolution)
+    curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp && \
+    curl -sL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+      -o /tmp/deno.zip && \
+    unzip -o -q /tmp/deno.zip -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/deno && \
+    rm /tmp/deno.zip && \
+    # Remove build-only packages and apt cache
+    apt-get purge -y -qq curl unzip > /dev/null 2>&1 && \
+    apt-get autoremove -y -qq > /dev/null 2>&1 && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
+# Python dependencies:
+# 1. Shared + lightweight deps (BOTSORT is vendored — no ultralytics/torch needed)
+# 2. GPU packages with --no-deps (avoid duplicate CUDA pip libs)
+COPY requirements.custom.txt /tmp/requirements.txt
+RUN pip3 install --quiet --break-system-packages -r /tmp/requirements.txt && \
+    pip3 install --quiet --break-system-packages --no-deps \
+      tensorrt_cu13==10.16.0.72 \
+      tensorrt_cu13_bindings==10.16.0.72 \
+      tensorrt_cu13_libs==10.16.0.72 && \
+    rm /tmp/requirements.txt && \
+    # Strip unnecessary files from site-packages
+    find /usr/local/lib/python3.12 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
+    find /usr/local/lib/python3.12 -type d -name "tests" -exec rm -rf {} + 2>/dev/null; \
+    find /usr/local/lib/python3.12 -type d -name "test" -exec rm -rf {} + 2>/dev/null; \
+    find /usr/local/lib/python3.12 -type f -name "*.pyc" -delete 2>/dev/null; \
+    find /usr/local/lib/python3.12 -type f -name "*.pyo" -delete 2>/dev/null; \
+    # Strip debug symbols from shared libraries
+    find /usr/local/lib/python3.12 -type f -name "*.so" -exec strip --strip-debug {} + 2>/dev/null; \
+    true
+
+WORKDIR /app

@@ -55,5 +55,6 @@ training/runs/*
 .env.local
 CLAUDE.md
 .ds-cache
+.custom-cache
 .node-cache
 .pytest_cache

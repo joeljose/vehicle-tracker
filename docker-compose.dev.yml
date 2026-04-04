@@ -1,31 +1,4 @@
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    runtime: nvidia
-    user: "${DS_UID}:${DS_GID}"
-    volumes:
-      - ./backend:/app/backend
-      - ./config:/app/config
-      - ./data_collection:/data
-      - ./snapshots:/app/snapshots
-      - ./experiments:/app/experiments
-      - ./models:/app/models
-      - ./.ds-cache:/home/ds
-    ports:
-      - "8000:8000"
-    working_dir: /app
-    command: ["tail", "-f", "/dev/null"]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-      - HOME=/home/ds
-      - PATH=/home/ds/.local/bin:/usr/local/bin:/usr/bin:/bin
-      - PYTHONPATH=/home/ds/.local/lib/python3.12/site-packages
-    stdin_open: true
-    tty: true
-
   frontend:
     image: node:22-alpine
     user: "${DS_UID}:${DS_GID}"
