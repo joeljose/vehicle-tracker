@@ -27,6 +27,11 @@ _JPEG_QUALITY = 80
 class FrameRenderer:
     """Renders annotated frames for MJPEG output."""
 
+    def decode_nv12(self, nv12_frame: cp.ndarray, height: int, width: int) -> np.ndarray:
+        """NV12 → BGR on GPU, then download to CPU. Returns BGR numpy array."""
+        bgr_gpu = nv12_to_bgr_gpu(nv12_frame, height, width)
+        return cp.asnumpy(bgr_gpu)
+
     def render(
         self,
         nv12_frame: cp.ndarray,
@@ -41,10 +46,17 @@ class FrameRenderer:
 
         Returns: JPEG bytes.
         """
-        # NV12 → BGR on GPU, then download to CPU
-        bgr_gpu = nv12_to_bgr_gpu(nv12_frame, height, width)
-        frame = cp.asnumpy(bgr_gpu)
+        frame = self.decode_nv12(nv12_frame, height, width)
+        return self.annotate_and_encode(frame, tracks, roi_polygon, entry_exit_lines)
 
+    def annotate_and_encode(
+        self,
+        frame: np.ndarray,
+        tracks: list[dict],
+        roi_polygon: list[tuple[float, float]] | None = None,
+        entry_exit_lines: dict | None = None,
+    ) -> bytes:
+        """Draw annotations on a BGR frame and encode to JPEG."""
         # Draw bounding boxes and track IDs
         for track in tracks:
             x, y, w, h = track["bbox"]
@@ -91,20 +103,9 @@ class FrameRenderer:
         )
         return jpeg.tobytes()
 
-    def render_cpu_frame(
-        self,
-        frame: np.ndarray,
-        tracks: list[dict],
-    ) -> bytes:
-        """Render on an already-downloaded CPU BGR frame. For best-photo crops."""
-        for track in tracks:
-            x, y, w, h = track["bbox"]
-            tid = track["track_id"]
-            cv2.rectangle(frame, (x, y), (x + w, y + h), _GREEN, _BOX_THICKNESS)
-            cv2.putText(
-                frame, f"#{tid}", (x, y - 8),
-                _FONT, _FONT_SCALE, _GREEN, _FONT_THICKNESS,
-            )
+    @staticmethod
+    def encode_clean(frame: np.ndarray) -> bytes:
+        """Encode a BGR frame to JPEG with no annotations."""
         _, jpeg = cv2.imencode(
             ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY],
         )

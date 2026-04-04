@@ -819,19 +819,18 @@ class CustomPipeline:
         pts: int,
     ):
         """Render annotated frame, build FrameResult, fire callback."""
-        # Render annotated JPEG
-        annotated_jpeg = self._renderer.render(
-            nv12,
-            state.decoder.height,
-            state.decoder.width,
-            tracks,
-            state.phase,
-            state.roi_polygon,
-            state.entry_exit_lines,
+        # Decode once, then branch: clean for replay, annotated for MJPEG
+        bgr_frame = self._renderer.decode_nv12(
+            nv12, state.decoder.height, state.decoder.width,
         )
 
-        # Save as last frame for Phase 3 replay
-        state.last_frame_jpeg = annotated_jpeg
+        # Save clean frame (no overlays) for Phase 3 frozen-frame replay
+        state.last_frame_jpeg = self._renderer.encode_clean(bgr_frame)
+
+        # Render annotated JPEG (with bboxes, ROI, lines)
+        annotated_jpeg = self._renderer.annotate_and_encode(
+            bgr_frame, tracks, state.roi_polygon, state.entry_exit_lines,
+        )
 
         det_list = [
             Detection(
