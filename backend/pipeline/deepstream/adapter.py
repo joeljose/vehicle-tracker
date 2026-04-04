@@ -23,6 +23,12 @@ from backend.pipeline.deepstream.config import (
 )
 from backend.pipeline.deepstream.pipeline import TrackingReporter
 from backend.pipeline.protocol import ChannelPhase, Detection, FrameResult
+from backend.pipeline.shared import (
+    cleanup_channel_snapshots,
+    get_snapshot,
+    parse_lines,
+    safe_callback,
+)
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stream_recovery import CircuitBreaker
 
@@ -327,38 +333,12 @@ class DeepStreamPipeline:
     # -- Snapshots --
 
     def get_snapshot(self, track_id: int) -> bytes | None:
-        import cv2
-        from pathlib import Path
-
-        # Try in-memory first (tracks still being processed)
-        for state in self._states.values():
-            if state.best_photo:
-                crop = state.best_photo.best_crops.get(track_id)
-                if crop is not None:
-                    bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
-                    _, buf = cv2.imencode(".jpg", bgr)
-                    return buf.tobytes()
-
-        # Fall back to disk (finalized tracks) — check per-channel dirs
-        snapshots_root = Path("snapshots")
-        for channel_dir in snapshots_root.iterdir() if snapshots_root.exists() else []:
-            if channel_dir.is_dir():
-                snapshot_path = channel_dir / f"{track_id}.jpg"
-                if snapshot_path.exists():
-                    return snapshot_path.read_bytes()
-
-        return None
+        return get_snapshot(self._states, track_id)
 
     # -- Thread bridging --
 
     def _safe_callback(self, fn, *args):
-        """Dispatch callback from GStreamer thread to asyncio event loop."""
-        if fn is None:
-            return
-        if self._loop is not None and self._loop.is_running():
-            self._loop.call_soon_threadsafe(fn, *args)
-        else:
-            fn(*args)
+        safe_callback(fn, *args, loop=self._loop)
 
     # -- Shared pipeline (M5) --
 
@@ -676,14 +656,7 @@ class DeepStreamPipeline:
         state.clean_extractor = None
 
     def _cleanup_channel_snapshots(self, channel_id: int) -> None:
-        """Remove snapshot directory for a channel."""
-        import shutil
-        from pathlib import Path
-
-        snapshot_dir = Path("snapshots") / str(channel_id)
-        if snapshot_dir.exists():
-            shutil.rmtree(snapshot_dir, ignore_errors=True)
-            logger.info("Cleaned up snapshots for channel %d", channel_id)
+        cleanup_channel_snapshots(channel_id)
 
     def _soft_remove_source(self, channel_id: int) -> None:
         """Soft-remove a channel's source from the shared pipeline.
@@ -725,17 +698,7 @@ class DeepStreamPipeline:
         """Add a non-looping analytics source to the shared pipeline."""
         state = self._states[channel_id]
 
-        from backend.pipeline.direction import LineSeg
-
-        lines = {}
-        if state.entry_exit_lines:
-            for arm_id, line_data in state.entry_exit_lines.items():
-                lines[arm_id] = LineSeg(
-                    label=line_data["label"],
-                    start=tuple(line_data["start"]),
-                    end=tuple(line_data["end"]),
-                    junction_side=line_data.get("junction_side", "left"),
-                )
+        lines = parse_lines(state.entry_exit_lines)
 
         def on_alert(alert):
             self._safe_callback(self._alert_callback, alert)

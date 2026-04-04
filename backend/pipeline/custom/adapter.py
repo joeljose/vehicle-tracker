@@ -23,15 +23,18 @@ from backend.pipeline.custom.engine_builder import ensure_engine
 from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu, nv12_to_rgb_gpu
 from backend.pipeline.custom.renderer import FrameRenderer
 from backend.pipeline.custom.tracker import TrackerWrapper
-from backend.pipeline.direction import (
-    DirectionStateMachine,
-    LineSeg,
-    check_line_crossing,
-    classify_crossing,
-)
+from backend.pipeline.direction import DirectionStateMachine, LineSeg
 from backend.pipeline.idle import IdleOptimizer
 from backend.pipeline.protocol import ChannelPhase, Detection, FrameResult
 from backend.pipeline.roi import point_in_polygon
+from backend.pipeline.shared import (
+    check_crossings,
+    cleanup_channel_snapshots,
+    finalize_lost_track,
+    get_snapshot,
+    parse_lines,
+    safe_callback,
+)
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stitch import TrackStitcher
 from backend.pipeline.trajectory import TrajectoryBuffer
@@ -237,27 +240,7 @@ class CustomPipeline:
     # -- Data access --
 
     def get_snapshot(self, track_id: int) -> bytes | None:
-        import cv2
-        from pathlib import Path
-
-        # Try in-memory first (tracks still being processed)
-        for state in self._states.values():
-            if state.best_photo:
-                crop = state.best_photo.best_crops.get(track_id)
-                if crop is not None:
-                    bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
-                    _, buf = cv2.imencode(".jpg", bgr)
-                    return buf.tobytes()
-
-        # Fall back to disk (finalized tracks)
-        snapshots_root = Path("snapshots")
-        for channel_dir in snapshots_root.iterdir() if snapshots_root.exists() else []:
-            if channel_dir.is_dir():
-                snapshot_path = channel_dir / f"{track_id}.jpg"
-                if snapshot_path.exists():
-                    return snapshot_path.read_bytes()
-
-        return None
+        return get_snapshot(self._states, track_id)
 
     # -- Pipeline loop (runs on background thread) --
 
@@ -627,7 +610,7 @@ class CustomPipeline:
         self, channel_id: int, state: _ChannelState, tracks: list[dict],
     ):
         """Process tracks through direction/ROI/stitch/alert pipeline."""
-        lines = self._parse_lines(state.entry_exit_lines)
+        lines = parse_lines(state.entry_exit_lines)
         seen_track_ids = set()
 
         for track in tracks:
@@ -782,43 +765,17 @@ class CustomPipeline:
         curr: tuple[float, float],
         lines: dict[str, LineSeg],
     ):
-        """Check if a track crossed any entry/exit line."""
-        for arm_id, line in lines.items():
-            direction = check_line_crossing(line, prev, curr)
-            if direction is None:
-                continue
-
-            crossing_type = classify_crossing(line, direction)
-            ts = state.active_tracks.get(track_id)
-            if ts is None:
-                continue
-
-            dsm = ts["dsm"]
-            alert = dsm.on_crossing(
-                arm_id,
-                line.label,
-                crossing_type,
-                trajectory=ts["trajectory"].get_full(),
-                arms=lines,
-                roi_centroid=state.roi_centroid,
-            )
-            if alert:
-                alert["track_id"] = track_id
-                alert["frame"] = state.infer_count
-                alert["label"] = ts["label"]
-                alert["channel"] = channel_id
-                alert["first_seen_frame"] = ts["first_frame"]
-                alert["last_seen_frame"] = ts["last_frame"]
-                alert["trajectory"] = ts["trajectory"].get_full()
-                alert["per_frame_data"] = ts.get("per_frame_data", [])
-                logger.info(
-                    "TRANSIT: Track #%d: %s -> %s (%s)",
-                    track_id,
-                    alert["entry_label"],
-                    alert["exit_label"],
-                    alert["method"],
-                )
-                self._safe_callback(self._alert_callback, alert)
+        check_crossings(
+            track_id=track_id,
+            prev=prev,
+            curr=curr,
+            lines=lines,
+            active_tracks=state.active_tracks,
+            roi_centroid=state.roi_centroid,
+            frame_count=state.infer_count,
+            channel_id=channel_id,
+            alert_callback=lambda a: self._safe_callback(self._alert_callback, a),
+        )
 
     def _finalize_lost_track(
         self,
@@ -828,50 +785,18 @@ class CustomPipeline:
         stitcher_state: dict,
         lines: dict[str, LineSeg],
     ):
-        """Finalize a track that expired from the stitcher."""
-        dsm = stitcher_state["dsm"]
-        trajectory = stitcher_state["trajectory"]
-        trajectory_full = trajectory.get_full()
-        label = stitcher_state.get("label", "unknown")
-        lifetime = stitcher_state.get("lifetime", 0)
-
-        # Save best photo
-        if state.best_photo:
-            snapshot_dir = os.path.join("snapshots", str(channel_id))
-            state.best_photo.save(tid, snapshot_dir)
-
-        # Direction inference
-        if lines:
-            alert = dsm.on_track_lost(
-                trajectory_full, lines, roi_centroid=state.roi_centroid,
-            )
-            if alert:
-                alert["track_id"] = tid
-                alert["frame"] = state.infer_count
-                alert["label"] = label
-                alert["channel"] = channel_id
-                alert["first_seen_frame"] = stitcher_state.get("first_frame", 0)
-                alert["last_seen_frame"] = state.infer_count
-                alert["trajectory"] = trajectory_full
-                alert["per_frame_data"] = stitcher_state.get("per_frame_data", [])
-                logger.info(
-                    "TRANSIT: Track #%d: %s -> %s (%s)",
-                    tid,
-                    alert["entry_label"],
-                    alert["exit_label"],
-                    alert["method"],
-                )
-                self._safe_callback(self._alert_callback, alert)
-
-        lost = {
-            "track_id": tid,
-            "label": label,
-            "lifetime": lifetime,
-            "trajectory": trajectory_full,
-            "roi_active": True,
-            "direction_state": dsm.state.value,
-        }
-        self._safe_callback(self._track_ended_callback, lost)
+        finalize_lost_track(
+            track_id=tid,
+            stitcher_state=stitcher_state,
+            lines=lines,
+            roi_centroid=state.roi_centroid,
+            frame_count=state.infer_count,
+            channel_id=channel_id,
+            best_photo=state.best_photo,
+            snapshot_dir=os.path.join("snapshots", str(channel_id)),
+            alert_callback=lambda a: self._safe_callback(self._alert_callback, a),
+            track_ended_callback=lambda t: self._safe_callback(self._track_ended_callback, t),
+        )
 
     # -- Frame emission --
 
@@ -929,7 +854,7 @@ class CustomPipeline:
         if state is None:
             return
 
-        lines = self._parse_lines(state.entry_exit_lines)
+        lines = parse_lines(state.entry_exit_lines)
 
         # Expire all stitcher tracks
         if state.stitcher:
@@ -946,38 +871,7 @@ class CustomPipeline:
         state.active_tracks.clear()
 
     def _cleanup_channel_snapshots(self, channel_id: int):
-        import shutil
-        from pathlib import Path
-
-        snapshot_dir = Path("snapshots") / str(channel_id)
-        if snapshot_dir.exists():
-            shutil.rmtree(snapshot_dir, ignore_errors=True)
-
-    def _parse_lines(self, entry_exit_lines: dict) -> dict[str, LineSeg]:
-        """Parse entry_exit_lines dict to LineSeg objects."""
-        if not entry_exit_lines:
-            return {}
-        lines = {}
-        for arm_id, line_data in entry_exit_lines.items():
-            if isinstance(line_data, LineSeg):
-                lines[arm_id] = line_data
-            elif isinstance(line_data, dict):
-                lines[arm_id] = LineSeg(
-                    start=tuple(line_data["start"]),
-                    end=tuple(line_data["end"]),
-                    label=line_data.get("label", arm_id),
-                    junction_side=line_data.get("junction_side", "left"),
-                )
-        return lines
+        cleanup_channel_snapshots(channel_id)
 
     def _safe_callback(self, callback, *args):
-        """Fire callback on asyncio loop if available, else direct."""
-        if callback is None:
-            return
-        try:
-            if self._loop and self._loop.is_running():
-                self._loop.call_soon_threadsafe(callback, *args)
-            else:
-                callback(*args)
-        except Exception as e:
-            logger.error("Callback error: %s", e)
+        safe_callback(callback, *args, loop=self._loop)

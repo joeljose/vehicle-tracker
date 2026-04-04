@@ -26,11 +26,10 @@ from backend.pipeline.deepstream.config import (
 from backend.pipeline.direction import (
     LineSeg,
     DirectionStateMachine,
-    check_line_crossing,
-    classify_crossing,
 )
 from backend.pipeline.idle import IdleOptimizer
 from backend.pipeline.roi import point_in_polygon
+from backend.pipeline.shared import check_crossings, finalize_lost_track
 from backend.pipeline.snapshot import BestPhotoTracker
 from backend.pipeline.stitch import TrackStitcher
 from backend.pipeline.trajectory import TrajectoryBuffer
@@ -352,58 +351,31 @@ class TrackingReporter(BatchMetadataOperator):
             logger.error("TrackingReporter: %s", e)
 
     def _finalize_lost_track(self, tid: int, stitcher_state: dict) -> None:
-        """Handle a track that expired from the stitcher (no merge found).
-
-        Performs deferred direction inference, best-photo save, and
-        adds the track to the lost_tracks summary.
-        """
-        dsm = stitcher_state["dsm"]
-        trajectory = stitcher_state["trajectory"]
-        trajectory_full = trajectory.get_full()
-        label = stitcher_state.get("label", "unknown")
-        lifetime = stitcher_state.get("lifetime", 0)
-
-        # Save best photo
+        """Handle a track that expired from the stitcher (no merge found)."""
         seq_tid = self._seq_id(tid)
-        if self.best_photo:
-            self.best_photo.save(seq_tid, self.snapshot_dir)
 
-        # Direction inference
-        if self.lines:
-            alert = dsm.on_track_lost(
-                trajectory_full, self.lines, roi_centroid=self.roi_centroid
-            )
-            if alert:
-                alert["track_id"] = seq_tid
-                alert["frame"] = self.frame_count
-                alert["label"] = label
-                alert["channel"] = self.channel_id
-                alert["first_seen_frame"] = stitcher_state.get("first_frame", 0)
-                alert["last_seen_frame"] = self.frame_count
-                alert["trajectory"] = trajectory_full
-                alert["per_frame_data"] = stitcher_state.get("per_frame_data", [])
-                self.transit_alerts.append(alert)
-                logger.info(
-                    "TRANSIT: Track #%d: %s -> %s (%s)",
-                    seq_tid,
-                    alert["entry_label"],
-                    alert["exit_label"],
-                    alert["method"],
-                )
-                if self.alert_callback:
-                    self.alert_callback(alert)
+        def on_alert(alert):
+            self.transit_alerts.append(alert)
+            if self.alert_callback:
+                self.alert_callback(alert)
 
-        lost_track = {
-            "track_id": seq_tid,
-            "label": label,
-            "lifetime": lifetime,
-            "trajectory": trajectory_full,
-            "roi_active": True,
-            "direction_state": dsm.state.value,
-        }
-        self.lost_tracks.append(lost_track)
-        if self.track_ended_callback:
-            self.track_ended_callback(lost_track)
+        def on_track_ended(lost):
+            self.lost_tracks.append(lost)
+            if self.track_ended_callback:
+                self.track_ended_callback(lost)
+
+        finalize_lost_track(
+            track_id=seq_tid,
+            stitcher_state=stitcher_state,
+            lines=self.lines,
+            roi_centroid=self.roi_centroid,
+            frame_count=self.frame_count,
+            channel_id=self.channel_id,
+            best_photo=self.best_photo,
+            snapshot_dir=self.snapshot_dir,
+            alert_callback=on_alert,
+            track_ended_callback=on_track_ended,
+        )
 
     def _check_crossings(
         self,
@@ -412,59 +384,26 @@ class TrackingReporter(BatchMetadataOperator):
         curr: tuple[float, float],
     ) -> None:
         """Check if a track crossed any entry/exit line."""
-        for arm_id, line in self.lines.items():
-            direction = check_line_crossing(line, prev, curr)
-            if direction is None:
-                continue
+        seq_tid = self._seq_id(track_id)
 
-            crossing_type = classify_crossing(line, direction)
-            logger.info(
-                "Track #%d crossed %s line (%s)",
-                track_id,
-                line.label,
-                crossing_type,
-            )
-            self.crossings.append(
-                {
-                    "track_id": self._seq_id(track_id),
-                    "arm": arm_id,
-                    "label": line.label,
-                    "type": crossing_type,
-                    "frame": self.frame_count,
-                }
-            )
+        def on_alert(alert):
+            # Remap to sequential ID for external consumers
+            alert["track_id"] = seq_tid
+            self.transit_alerts.append(alert)
+            if self.alert_callback:
+                self.alert_callback(alert)
 
-            # Feed to direction state machine
-            track_state = self.active_tracks.get(track_id)
-            if track_state:
-                dsm = track_state["dsm"]
-                alert = dsm.on_crossing(
-                    arm_id,
-                    line.label,
-                    crossing_type,
-                    trajectory=track_state["trajectory"].get_full(),
-                    arms=self.lines,
-                    roi_centroid=self.roi_centroid,
-                )
-                if alert:
-                    alert["track_id"] = self._seq_id(track_id)
-                    alert["frame"] = self.frame_count
-                    alert["label"] = track_state["label"]
-                    alert["channel"] = self.channel_id
-                    alert["first_seen_frame"] = track_state["first_frame"]
-                    alert["last_seen_frame"] = track_state["last_frame"]
-                    alert["trajectory"] = track_state["trajectory"].get_full()
-                    alert["per_frame_data"] = track_state.get("per_frame_data", [])
-                    self.transit_alerts.append(alert)
-                    logger.info(
-                        "TRANSIT: Track #%d: %s -> %s (%s)",
-                        track_id,
-                        alert["entry_label"],
-                        alert["exit_label"],
-                        alert["method"],
-                    )
-                    if self.alert_callback:
-                        self.alert_callback(alert)
+        check_crossings(
+            track_id=track_id,
+            prev=prev,
+            curr=curr,
+            lines=self.lines,
+            active_tracks=self.active_tracks,
+            roi_centroid=self.roi_centroid,
+            frame_count=self.frame_count,
+            channel_id=self.channel_id,
+            alert_callback=on_alert,
+        )
 
     def summary(self) -> dict:
         """Return summary stats including tracking info."""
