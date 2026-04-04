@@ -832,10 +832,8 @@ class CustomPipeline:
         # Save clean frame (no overlays) for Phase 3 frozen-frame replay
         state.last_frame_jpeg = self._renderer.encode_clean(bgr_frame)
 
-        # Render annotated JPEG (with bboxes, ROI, lines)
-        annotated_jpeg = self._renderer.annotate_and_encode(
-            bgr_frame, tracks, state.roi_polygon, state.entry_exit_lines,
-        )
+        # Render annotated JPEG (bboxes only — ROI/lines are frontend overlays)
+        annotated_jpeg = self._renderer.annotate_and_encode(bgr_frame, tracks)
 
         det_list = [
             Detection(

@@ -89,7 +89,7 @@ function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps, l
         <DrawingCanvas imgRef={imgRef} {...drawingProps} />
       )}
       {phase === "analytics" && loaded && (
-        <LinesOverlay lines={lines} targetRef={imgRef} />
+        <LinesOverlay lines={lines} roi={roi} targetRef={imgRef} />
       )}
     </div>
   );

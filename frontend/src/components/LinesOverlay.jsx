@@ -5,18 +5,21 @@ const LINE_COLORS = ["#4ade80", "#fbbf24", "#60a5fa", "#f87171"];
 const LABEL_BG = "rgba(0,0,0,0.7)";
 
 /**
- * LinesOverlay — draws entry/exit lines on a transparent canvas over
- * the MJPEG stream (Analytics) or replay video (Review).
+ * LinesOverlay — draws entry/exit lines and optional ROI polygon on a
+ * transparent canvas over the MJPEG stream (Analytics) or replay video (Review).
  *
  * Props:
  *   lines     - array of {label, start: {x,y}, end: {x,y}} in image coords
+ *   roi       - array of {x,y} points (optional, draws semi-transparent polygon)
  *   targetRef - ref to the <img> or <video> element for geometry
  */
-export default function LinesOverlay({ lines, targetRef }) {
+export default function LinesOverlay({ lines, roi, targetRef }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
-    if (!lines || lines.length === 0) return;
+    const hasLines = lines && lines.length > 0;
+    const hasRoi = roi && roi.length >= 3;
+    if (!hasLines && !hasRoi) return;
 
     let rafId;
     function draw() {
@@ -63,6 +66,23 @@ export default function LinesOverlay({ lines, targetRef }) {
 
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw ROI polygon (semi-transparent fill + border)
+      if (roi && roi.length >= 3) {
+        const first = imageToDisplayCoords(roi[0].x, roi[0].y, geo);
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < roi.length; i++) {
+          const p = imageToDisplayCoords(roi[i].x, roi[i].y, geo);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = "rgba(0, 255, 255, 0.08)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0, 255, 255, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -112,9 +132,9 @@ export default function LinesOverlay({ lines, targetRef }) {
       if (rafId) cancelAnimationFrame(rafId);
       observer.disconnect();
     };
-  }, [lines, targetRef]);
+  }, [lines, roi, targetRef]);
 
-  if (!lines || lines.length === 0) return null;
+  if ((!lines || lines.length === 0) && (!roi || roi.length < 3)) return null;
 
   return (
     <canvas
