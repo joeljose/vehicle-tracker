@@ -138,6 +138,8 @@ class TrackStitcher:
             "lost_track_id": best_tid,
             "dsm": state["dsm"],
             "trajectory": state["trajectory"],
+            "per_frame_data": state.get("per_frame_data", []),
+            "first_frame": state.get("first_frame", 0),
             "distance": best_dist,
             "gap_frames": gap_frames,
         }

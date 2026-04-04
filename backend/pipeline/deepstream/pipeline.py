@@ -146,27 +146,32 @@ class TrackingReporter(BatchMetadataOperator):
                             frame_number=self.frame_count,
                         )
                         if match:
-                            # Merge: inherit trajectory, DSM from lost track
+                            # Merge: inherit trajectory, DSM, per_frame_data
                             traj = match["trajectory"]
                             traj.append(cx, cy, self.frame_count)
                             dsm = match["dsm"]
+                            old_pfd = match.get("per_frame_data", [])
+                            pfd = deque(old_pfd, maxlen=_MAX_PER_FRAME_DATA)
+                            first_frame = match.get("first_frame", self.frame_count)
                             lost_tid = match["lost_track_id"]
                             self.merge_count += 1
                             gap_sec = match["gap_frames"] / 30.0
                             logger.info(
                                 "Track #%d merged with lost track "
-                                "#%d (dist=%dpx, gap=%.1fs)",
+                                "#%d (dist=%dpx, gap=%.1fs, %d pfd)",
                                 track_id,
                                 lost_tid,
                                 match["distance"],
                                 gap_sec,
+                                len(old_pfd),
                             )
                         else:
                             traj = TrajectoryBuffer()
                             traj.append(cx, cy, self.frame_count)
                             dsm = DirectionStateMachine()
+                            pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
+                            first_frame = self.frame_count
 
-                        pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
                         pfd.append(
                             {
                                 "frame": self.frame_count,
@@ -183,7 +188,7 @@ class TrackingReporter(BatchMetadataOperator):
                         )
                         self.active_tracks[track_id] = {
                             "label": label,
-                            "first_frame": self.frame_count,
+                            "first_frame": first_frame,
                             "last_frame": self.frame_count,
                             "trajectory": traj,
                             "roi_active": in_roi,

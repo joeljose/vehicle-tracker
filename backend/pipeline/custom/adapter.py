@@ -643,16 +643,21 @@ class CustomPipeline:
                     traj = match["trajectory"]
                     traj.append(cx, cy, state.infer_count)
                     dsm = match["dsm"]
+                    # Inherit per_frame_data from the lost track
+                    old_pfd = match.get("per_frame_data", [])
+                    pfd = deque(old_pfd, maxlen=_MAX_PER_FRAME_DATA)
+                    first_frame = match.get("first_frame", state.infer_count)
                     logger.info(
-                        "Track #%d merged with lost #%d",
-                        tid, match["lost_track_id"],
+                        "Track #%d merged with lost #%d (%d pfd inherited)",
+                        tid, match["lost_track_id"], len(old_pfd),
                     )
                 else:
                     traj = TrajectoryBuffer()
                     traj.append(cx, cy, state.infer_count)
                     dsm = DirectionStateMachine()
+                    pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
+                    first_frame = state.infer_count
 
-                pfd = deque(maxlen=_MAX_PER_FRAME_DATA)
                 bbox = track["bbox"]
                 pfd.append({
                     "frame": state.infer_count,
@@ -663,7 +668,7 @@ class CustomPipeline:
                 })
                 state.active_tracks[tid] = {
                     "label": track["class_name"],
-                    "first_frame": state.infer_count,
+                    "first_frame": first_frame,
                     "last_frame": state.infer_count,
                     "trajectory": traj,
                     "roi_active": in_roi,

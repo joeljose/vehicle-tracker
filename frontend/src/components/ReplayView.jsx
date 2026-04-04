@@ -97,19 +97,14 @@ export default function ReplayView({ alert, lines, roi, source }) {
     // Map video playback time to original-video time.
     const currentMs = (video.currentTime || 0) * 1000;
     const fps = 30;
-    const paddingBeforeMs = 3000;  // must match backend PADDING_BEFORE_S
+    const paddingBeforeMs = 1000;  // must match backend PADDING_BEFORE_S
     const clipStartMs = Math.max(0, (fullAlert.first_seen_frame / fps) * 1000 - paddingBeforeMs);
     const originalMs = currentMs + clipStartMs;
 
     const firstTs = perFrame[0].timestamp_ms;
     const lastTs = perFrame[perFrame.length - 1].timestamp_ms;
-    // During pre-detection padding, show first bbox frozen in place
-    if (originalMs > lastTs + 500) return;
-    if (originalMs < firstTs) {
-      const frame = perFrame[0];
-      drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
-      return;
-    }
+    // Only draw bbox while track is active (between first and last detection)
+    if (originalMs < firstTs || originalMs > lastTs) return;
 
     // Binary search for closest frame
     let lo = 0, hi = perFrame.length - 1;
@@ -158,9 +153,11 @@ export default function ReplayView({ alert, lines, roi, source }) {
       return;
     }
 
-    // Loop the animation
-    const elapsed = progressMs % (duration + 1000); // 1s pause between loops
-    const currentMs = firstTs + Math.min(elapsed, duration);
+    // Loop the animation with 1s pause between loops
+    const elapsed = progressMs % (duration + 1000);
+    // During the pause (after animation ends), hide bbox
+    if (elapsed > duration) return;
+    const currentMs = firstTs + elapsed;
 
     // Binary search for closest frame
     let lo = 0, hi = perFrame.length - 1;

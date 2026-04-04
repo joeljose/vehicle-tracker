@@ -14,8 +14,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 CLIPS_DIR = Path("/tmp/vt_clips")
-PADDING_BEFORE_S = 3.0  # seconds before first detection
-PADDING_AFTER_S = 1.0   # seconds after last detection
+PADDING_BEFORE_S = 1.0  # seconds before first detection
+PADDING_AFTER_S = 0.5   # seconds after last detection
 
 
 class ClipExtractor:
