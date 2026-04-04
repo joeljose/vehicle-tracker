@@ -3,6 +3,7 @@
 Wraps vendored BOTSORT (from ultralytics v8.4, no torch/ultralytics dependency) with:
 - A DetectionResults adapter (BoT-SORT expects .conf/.xyxy/.xywh/.cls)
 - Sequential ID mapping (tracker IDs → 1, 2, 3...)
+- Optional HSV histogram ReID for appearance-based matching
 - Reset on phase transition
 """
 
@@ -55,16 +56,22 @@ class DetectionResults:
 class TrackerWrapper:
     """Per-channel BoT-SORT tracker with sequential ID mapping."""
 
-    def __init__(self):
-        self._tracker = self._create_tracker()
+    def __init__(self, *, with_reid: bool = True):
+        self._with_reid = with_reid
+        self._tracker = self._create_tracker(with_reid)
         self._to_seq: dict[int, int] = {}
         self._next_seq_id = 1
 
-    def update(self, detections: np.ndarray) -> list[dict]:
+    def update(
+        self,
+        detections: np.ndarray,
+        frame: np.ndarray | None = None,
+    ) -> list[dict]:
         """Feed detections, return tracked objects.
 
         Args:
             detections: (N, 6) array [x1, y1, x2, y2, conf, cls].
+            frame: BGR frame for ReID feature extraction (optional).
 
         Returns:
             List of dicts with keys: track_id, bbox (x,y,w,h), confidence,
@@ -75,14 +82,12 @@ class TrackerWrapper:
             self._tracker.multi_predict(self._tracker.tracked_stracks)
             return []
 
-        raw_tracks = self._tracker.update(results)
+        raw_tracks = self._tracker.update(results, img=frame)
         if len(raw_tracks) == 0:
             return []
 
         tracks = []
         for t in raw_tracks:
-            # raw_tracks shape: (M, N) — columns vary by ultralytics version
-            # Typically: x1, y1, x2, y2, track_id, conf, cls
             x1, y1, x2, y2 = float(t[0]), float(t[1]), float(t[2]), float(t[3])
             raw_tid = int(t[4])
             conf = float(t[5]) if len(t) > 5 else 0.0
@@ -110,7 +115,7 @@ class TrackerWrapper:
 
     def reset(self) -> None:
         """Reset tracker state. Called on Setup→Analytics transition."""
-        self._tracker = self._create_tracker()
+        self._tracker = self._create_tracker(self._with_reid)
         self._to_seq.clear()
         self._next_seq_id = 1
         logger.debug("TrackerWrapper: reset")
@@ -123,19 +128,23 @@ class TrackerWrapper:
         return self._to_seq[raw_id]
 
     @staticmethod
-    def _create_tracker():
+    def _create_tracker(with_reid: bool = True):
         from backend.pipeline.custom.botsort import BOTSORT
+        from backend.pipeline.custom.botsort.encoder import HistogramEncoder
+
+        encoder = HistogramEncoder() if with_reid else None
 
         args = argparse.Namespace(
             track_high_thresh=0.25,
             track_low_thresh=0.1,
             new_track_thresh=0.25,
-            track_buffer=30,
+            track_buffer=150,       # 5s at 30fps (match NvDCF)
             match_thresh=0.8,
             fuse_score=True,
             gmc_method="none",
             proximity_thresh=0.5,
-            appearance_thresh=0.8,
-            with_reid=False,
+            appearance_thresh=0.25,  # cosine distance threshold for ReID
+            with_reid=with_reid,
+            encoder=encoder,
         )
-        return BOTSORT(args)
+        return BOTSORT(args, frame_rate=30)

@@ -373,6 +373,14 @@ class DirectionStateMachine:
             TrackState.WAITING,
             TrackState.STAGNANT,
         ):
+            # Reject same-arm exit (bbox jitter near a line, not a real transit)
+            if arm_id == self.entry_arm:
+                # Vehicle oscillated back across the same line — reset to UNKNOWN
+                self.entry_arm = None
+                self.entry_label = None
+                self.state = TrackState.UNKNOWN
+                return None
+
             self.exit_arm = arm_id
             self.exit_label = label
             return {

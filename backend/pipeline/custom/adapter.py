@@ -300,8 +300,13 @@ class CustomPipeline:
                 # TRT inference + NMS
                 detections = self._detector.detect(input_tensor, scale_info)
 
-                # BoT-SORT tracking
-                tracks = state.tracker.update(detections)
+                # BoT-SORT tracking (pass BGR frame for ReID feature extraction)
+                bgr_frame = None
+                if len(detections) > 0 and state.tracker._with_reid:
+                    import cupy as cp
+                    bgr_gpu = nv12_to_bgr_gpu(nv12, state.decoder.height, state.decoder.width)
+                    bgr_frame = cp.asnumpy(bgr_gpu)
+                tracks = state.tracker.update(detections, frame=bgr_frame)
 
                 infer_ms = (time.monotonic() - t0) * 1000
                 state.infer_count += 1

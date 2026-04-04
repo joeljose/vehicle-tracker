@@ -92,7 +92,7 @@ class BOTSORT(BYTETracker):
         self.gmc = GMC(method=args.gmc_method)
         self.proximity_thresh = args.proximity_thresh
         self.appearance_thresh = args.appearance_thresh
-        self.encoder = None  # ReID disabled
+        self.encoder = getattr(args, "encoder", None)
 
     def get_kalmanfilter(self):
         return KalmanFilterXYWH()
@@ -102,6 +102,9 @@ class BOTSORT(BYTETracker):
             return []
         bboxes = results.xywhr if hasattr(results, "xywhr") else results.xywh
         bboxes = np.concatenate([bboxes, np.arange(len(bboxes)).reshape(-1, 1)], axis=-1)
+        if self.encoder is not None and img is not None:
+            features = self.encoder(img, results.xyxy)
+            return [BOTrack(xywh, s, c, f) for (xywh, s, c, f) in zip(bboxes, results.conf, results.cls, features)]
         return [BOTrack(xywh, s, c) for (xywh, s, c) in zip(bboxes, results.conf, results.cls)]
 
     def get_dists(self, tracks, detections):
