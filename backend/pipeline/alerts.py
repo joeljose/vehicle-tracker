@@ -27,6 +27,18 @@ class AlertStore:
     def _generate_id(self) -> str:
         return uuid.uuid4().hex[:8]
 
+    def _compute_duration_ms(self, per_frame_data: list, pipeline_alert: dict) -> int:
+        """Compute duration from per_frame_data timestamps, falling back to frame count."""
+        if len(per_frame_data) >= 2:
+            first_ts = per_frame_data[0].get("timestamp_ms", 0)
+            last_ts = per_frame_data[-1].get("timestamp_ms", 0)
+            if last_ts > first_ts:
+                return last_ts - first_ts
+        # Fallback: frame-based calculation
+        first = pipeline_alert.get("first_seen_frame", 0)
+        last = pipeline_alert.get("last_seen_frame", 0)
+        return int((last - first) / self._fps * 1000)
+
     def add_transit_alert(self, pipeline_alert: dict, channel: int) -> str:
         """Store a transit alert from pipeline output.
 
@@ -48,7 +60,6 @@ class AlertStore:
         # Store track_id as string — DeepStream IDs exceed JavaScript's
         # Number.MAX_SAFE_INTEGER and lose precision in JSON parsing.
         track_id = str(pipeline_alert["track_id"])
-        duration_frames = pipeline_alert.get("duration_frames", 0)
         trajectory = pipeline_alert.get("trajectory", [])
         per_frame_data = pipeline_alert.get("per_frame_data", [])
 
@@ -81,7 +92,7 @@ class AlertStore:
             ],
             "first_seen_frame": pipeline_alert.get("first_seen_frame", 0),
             "last_seen_frame": pipeline_alert.get("last_seen_frame", 0),
-            "duration_ms": int(duration_frames / self._fps * 1000),
+            "duration_ms": self._compute_duration_ms(per_frame_data, pipeline_alert),
             "timestamp_ms": int(time.time() * 1000),
             "avg_confidence": round(avg_confidence, 2),
             "max_confidence": round(max_confidence, 2),

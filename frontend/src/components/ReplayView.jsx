@@ -94,15 +94,15 @@ export default function ReplayView({ alert, lines, roi, source }) {
     const perFrame = fullAlert.per_frame_data || [];
     if (perFrame.length === 0) return;
 
-    // Map video playback time to original-video time.
-    const currentMs = (video.currentTime || 0) * 1000;
-    const fps = 30;
-    const paddingBeforeMs = 1000;  // must match backend PADDING_BEFORE_S
-    const clipStartMs = Math.max(0, (fullAlert.first_seen_frame / fps) * 1000 - paddingBeforeMs);
-    const originalMs = currentMs + clipStartMs;
-
     const firstTs = perFrame[0].timestamp_ms;
     const lastTs = perFrame[perFrame.length - 1].timestamp_ms;
+
+    // Map video playback time to original-video time.
+    // Clip starts at firstTs - PADDING_BEFORE_S (1s), use per_frame_data timestamps (fps-agnostic).
+    const currentMs = (video.currentTime || 0) * 1000;
+    const paddingBeforeMs = 1000;  // must match backend PADDING_BEFORE_S
+    const clipStartMs = Math.max(0, firstTs - paddingBeforeMs);
+    const originalMs = currentMs + clipStartMs;
     // Only draw bbox while track is active (between first and last detection)
     if (originalMs < firstTs || originalMs > lastTs) return;
 

@@ -108,11 +108,17 @@ class ClipExtractor:
         clip_dir: Path,
     ) -> None:
         """Extract a short clip for a transit alert using ffmpeg."""
-        first_frame = alert.get("first_seen_frame", 0)
-        last_frame = alert.get("last_seen_frame", 0)
+        # Use per_frame_data timestamps (ms) — fps-agnostic
+        pfd = alert.get("per_frame_data", [])
+        if pfd:
+            first_ms = pfd[0].get("timestamp_ms", 0)
+            last_ms = pfd[-1].get("timestamp_ms", 0)
+        else:
+            first_ms = alert.get("first_seen_frame", 0) / self._fps * 1000
+            last_ms = alert.get("last_seen_frame", 0) / self._fps * 1000
 
-        start_s = max(0, first_frame / self._fps - PADDING_BEFORE_S)
-        end_s = last_frame / self._fps + PADDING_AFTER_S
+        start_s = max(0, first_ms / 1000 - PADDING_BEFORE_S)
+        end_s = last_ms / 1000 + PADDING_AFTER_S
 
         output = clip_dir / f"clip_{alert_id}.mp4"
 
@@ -169,11 +175,15 @@ class ClipExtractor:
         clip_dir: Path,
     ) -> None:
         """Extract a single frame for a stagnant alert using ffmpeg."""
-        # Use the midpoint between first and last seen
-        first_frame = alert.get("first_seen_frame", 0)
-        last_frame = alert.get("last_seen_frame", first_frame)
-        mid_frame = (first_frame + last_frame) // 2
-        timestamp_s = mid_frame / self._fps
+        pfd = alert.get("per_frame_data", [])
+        if pfd:
+            first_ms = pfd[0].get("timestamp_ms", 0)
+            last_ms = pfd[-1].get("timestamp_ms", 0)
+            timestamp_s = (first_ms + last_ms) / 2 / 1000
+        else:
+            first_frame = alert.get("first_seen_frame", 0)
+            last_frame = alert.get("last_seen_frame", first_frame)
+            timestamp_s = (first_frame + last_frame) / 2 / self._fps
 
         output = clip_dir / f"frame_{alert_id}.jpg"
 
