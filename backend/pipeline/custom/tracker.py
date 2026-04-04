@@ -1,6 +1,6 @@
 """Standalone BoT-SORT tracker wrapper.
 
-Wraps ultralytics.trackers.bot_sort.BOTSORT with:
+Wraps vendored BOTSORT (from ultralytics v8.4, no torch/ultralytics dependency) with:
 - A DetectionResults adapter (BoT-SORT expects .conf/.xyxy/.xywh/.cls)
 - Sequential ID mapping (tracker IDs → 1, 2, 3...)
 - Reset on phase transition
@@ -72,7 +72,7 @@ class TrackerWrapper:
         """
         results = DetectionResults(detections)
         if len(results) == 0:
-            self._tracker.multi_predict()
+            self._tracker.multi_predict(self._tracker.tracked_stracks)
             return []
 
         raw_tracks = self._tracker.update(results)
@@ -124,7 +124,7 @@ class TrackerWrapper:
 
     @staticmethod
     def _create_tracker():
-        from ultralytics.trackers.bot_sort import BOTSORT
+        from backend.pipeline.custom.botsort import BOTSORT
 
         args = argparse.Namespace(
             track_high_thresh=0.25,
