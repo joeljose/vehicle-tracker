@@ -14,7 +14,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 CLIPS_DIR = Path("/tmp/vt_clips")
-PADDING_S = 1.0  # seconds of padding before/after track
+PADDING_BEFORE_S = 3.0  # seconds before first detection
+PADDING_AFTER_S = 1.0   # seconds after last detection
 
 
 class ClipExtractor:
@@ -110,8 +111,8 @@ class ClipExtractor:
         first_frame = alert.get("first_seen_frame", 0)
         last_frame = alert.get("last_seen_frame", 0)
 
-        start_s = max(0, first_frame / self._fps - PADDING_S)
-        end_s = last_frame / self._fps + PADDING_S
+        start_s = max(0, first_frame / self._fps - PADDING_BEFORE_S)
+        end_s = last_frame / self._fps + PADDING_AFTER_S
 
         output = clip_dir / f"clip_{alert_id}.mp4"
 

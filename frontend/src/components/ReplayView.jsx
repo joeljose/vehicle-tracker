@@ -91,13 +91,22 @@ export default function ReplayView({ alert, lines, source }) {
     // Map video playback time to original-video time.
     const currentMs = (video.currentTime || 0) * 1000;
     const fps = 30;
-    const paddingMs = 1000;
-    const clipStartMs = Math.max(0, (fullAlert.first_seen_frame / fps) * 1000 - paddingMs);
+    const paddingBeforeMs = 3000;  // must match backend PADDING_BEFORE_S
+    const clipStartMs = Math.max(0, (fullAlert.first_seen_frame / fps) * 1000 - paddingBeforeMs);
     const originalMs = currentMs + clipStartMs;
 
     const firstTs = perFrame[0].timestamp_ms;
     const lastTs = perFrame[perFrame.length - 1].timestamp_ms;
-    if (originalMs < firstTs - 500 || originalMs > lastTs + 500) return;
+    // During pre-detection padding, show first bbox frozen in place
+    if (originalMs > lastTs + 500) return;
+    if (originalMs < firstTs) {
+      // Before first detection — draw first known position as static overlay
+      const frame = perFrame[0];
+      const natW = video.videoWidth || 1920;
+      const natH = video.videoHeight || 1080;
+      drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
+      return;
+    }
 
     // Binary search for closest frame
     let lo = 0, hi = perFrame.length - 1;
