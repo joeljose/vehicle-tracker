@@ -234,16 +234,26 @@ class CustomPipeline:
     # -- Data access --
 
     def get_snapshot(self, track_id: int) -> bytes | None:
+        import cv2
+        from pathlib import Path
+
+        # Try in-memory first (tracks still being processed)
         for state in self._states.values():
             if state.best_photo:
                 crop = state.best_photo.best_crops.get(track_id)
                 if crop is not None:
-                    import cv2
+                    bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+                    _, buf = cv2.imencode(".jpg", bgr)
+                    return buf.tobytes()
 
-                    _, jpeg = cv2.imencode(
-                        ".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90],
-                    )
-                    return jpeg.tobytes()
+        # Fall back to disk (finalized tracks)
+        snapshots_root = Path("snapshots")
+        for channel_dir in snapshots_root.iterdir() if snapshots_root.exists() else []:
+            if channel_dir.is_dir():
+                snapshot_path = channel_dir / f"{track_id}.jpg"
+                if snapshot_path.exists():
+                    return snapshot_path.read_bytes()
+
         return None
 
     # -- Pipeline loop (runs on background thread) --
