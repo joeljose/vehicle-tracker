@@ -39,16 +39,16 @@ function PhaseIndicator({ current }) {
   );
 }
 
-function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps, lines }) {
+function VideoPanel({ channelId, pipelineStarted, phase, imgRef, drawingProps, lines, roi }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
 
   useEffect(() => {
-    if (pipelineStarted) {
-      setErrored(false);
-      setLoaded(false);
-    }
-  }, [pipelineStarted]);
+    // Reset stream state on pipeline start or phase change
+    // (DeepStream rebuilds the GStreamer pipeline on phase transitions)
+    setErrored(false);
+    setLoaded(false);
+  }, [pipelineStarted, phase]);
 
   const streamUrl = `/api/stream/${channelId}`;
 
@@ -435,6 +435,7 @@ function ChannelContent() {
               imgRef={imgRef}
               drawingProps={drawingProps}
               lines={lines}
+              roi={roi}
             />
           )}
           <StatsBar />
