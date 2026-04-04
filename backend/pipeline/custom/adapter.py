@@ -380,8 +380,8 @@ class CustomPipeline:
         state.tracker = TrackerWrapper()
         state.stitcher = TrackStitcher()
         state.idle_optimizer = IdleOptimizer()
-        # Frame pacing for file sources (HLS is self-pacing via network)
-        if not is_live and state.decoder.fps > 0:
+        # Frame pacing — throttle decode to source FPS for real-time playback
+        if state.decoder.fps > 0:
             state.frame_interval = 1.0 / state.decoder.fps
         logger.info("Channel %d: decoder + tracker created", channel_id)
 
