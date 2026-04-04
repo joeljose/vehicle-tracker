@@ -140,7 +140,7 @@ class MjpegExtractor(BufferOperator):
                 result = FrameResult(
                     channel_id=self._channel_id,
                     frame_number=self._reporter.frame_count,
-                    timestamp_ms=int(self._reporter.frame_count * (1000 / 30)),
+                    timestamp_ms=self._reporter._current_pts_ms,
                     detections=detections,
                     annotated_jpeg=jpeg_bytes,
                     phase=("analytics" if self._reporter.roi_polygon else "setup"),

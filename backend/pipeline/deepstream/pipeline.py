@@ -67,7 +67,9 @@ class TrackingReporter(BatchMetadataOperator):
         self.stagnant_threshold_sec = 150.0
         self.crossings: list[dict] = []  # all crossing events
         self.transit_alerts: list[dict] = []  # completed transit alerts
-        self.frame_count = 0
+        self.frame_count = 0  # counts inference frames (after 60→30 skip)
+        self._raw_frame_count = 0  # counts all decoded frames
+        self._current_pts_ms = 0  # PTS of current frame in ms
         self.total_detections = 0
         self.class_counts: dict[str, int] = {}
         self.start_time: float | None = None
@@ -113,7 +115,13 @@ class TrackingReporter(BatchMetadataOperator):
                 self.start_time = time.time()
 
             for frame_meta in batch_meta.frame_items:
+                self._raw_frame_count += 1
+                # Frame rate normalization: skip odd frames (60→30fps)
+                if self._raw_frame_count % 2 != 0:
+                    continue
                 self.frame_count += 1
+                # Use PTS for accurate timestamps (ns → ms)
+                self._current_pts_ms = int(frame_meta.buffer_pts / 1_000_000)
                 frame_detections = 0
                 seen_track_ids = set()
 
@@ -183,7 +191,7 @@ class TrackingReporter(BatchMetadataOperator):
                                 ],
                                 "centroid": [cx, cy],
                                 "confidence": round(obj_meta.confidence, 3),
-                                "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                                "timestamp_ms": self._current_pts_ms,
                             }
                         )
                         self.active_tracks[track_id] = {
@@ -222,7 +230,7 @@ class TrackingReporter(BatchMetadataOperator):
                                 ],
                                 "centroid": [cx, cy],
                                 "confidence": round(obj_meta.confidence, 3),
-                                "timestamp_ms": int(self.frame_count * (1000 / 30)),
+                                "timestamp_ms": self._current_pts_ms,
                             }
                         )
                         # Update ROI status (track can move in/out)
