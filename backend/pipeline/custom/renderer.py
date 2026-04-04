@@ -59,9 +59,12 @@ class FrameRenderer:
                 _FONT, _FONT_SCALE, _GREEN, _FONT_THICKNESS,
             )
 
-        # Draw ROI polygon (Setup + Analytics)
+        # Draw ROI polygon — semi-transparent fill + border
         if roi_polygon and len(roi_polygon) >= 3:
             pts = np.array(roi_polygon, dtype=np.int32).reshape((-1, 1, 2))
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [pts], _CYAN)
+            cv2.addWeighted(overlay, 0.10, frame, 0.90, 0, frame)
             cv2.polylines(frame, [pts], isClosed=True, color=_CYAN, thickness=1)
 
         # Draw entry/exit lines

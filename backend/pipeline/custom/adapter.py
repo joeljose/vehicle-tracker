@@ -203,7 +203,10 @@ class CustomPipeline:
         if channel_id not in self._states:
             raise KeyError(f"Channel {channel_id} not found")
         state = self._states[channel_id]
-        return {"entry_exit_lines": state.entry_exit_lines or {}}
+        return {
+            "roi_polygon": [list(p) for p in state.roi_polygon] if state.roi_polygon else [],
+            "entry_exit_lines": state.entry_exit_lines or {},
+        }
 
     # -- Configuration --
 

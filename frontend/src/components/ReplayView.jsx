@@ -18,7 +18,7 @@ const LABEL_BG = "rgba(0,0,0,0.7)";
  *   alert - selected alert summary (from AlertFeed click)
  *   lines - entry/exit lines to overlay
  */
-export default function ReplayView({ alert, lines, source }) {
+export default function ReplayView({ alert, lines, roi, source }) {
   const [fullAlert, setFullAlert] = useState(null);
   const [replayStatus, setReplayStatus] = useState(null);
   const [error, setError] = useState(null);
@@ -85,6 +85,12 @@ export default function ReplayView({ alert, lines, source }) {
     canvas.height = container.clientHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    const natW = video.videoWidth || 1920;
+    const natH = video.videoHeight || 1080;
+
+    // Draw ROI polygon (always visible)
+    drawRoiPolygon(ctx, canvas, natW, natH, roi);
+
     const perFrame = fullAlert.per_frame_data || [];
     if (perFrame.length === 0) return;
 
@@ -100,10 +106,7 @@ export default function ReplayView({ alert, lines, source }) {
     // During pre-detection padding, show first bbox frozen in place
     if (originalMs > lastTs + 500) return;
     if (originalMs < firstTs) {
-      // Before first detection — draw first known position as static overlay
       const frame = perFrame[0];
-      const natW = video.videoWidth || 1920;
-      const natH = video.videoHeight || 1080;
       drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
       return;
     }
@@ -118,10 +121,8 @@ export default function ReplayView({ alert, lines, source }) {
     const frame = perFrame[lo];
     if (!frame) return;
 
-    const natW = video.videoWidth || 1920;
-    const natH = video.videoHeight || 1080;
     drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
-  }, [fullAlert]);
+  }, [fullAlert, roi]);
 
   // Frozen-frame overlay — animated bbox replay on static image
   const drawFrozenOverlay = useCallback((progressMs) => {
@@ -136,6 +137,12 @@ export default function ReplayView({ alert, lines, source }) {
     canvas.width = container.clientWidth;
     canvas.height = container.clientHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const natW = img.naturalWidth || 1920;
+    const natH = img.naturalHeight || 1080;
+
+    // Draw ROI polygon (always visible)
+    drawRoiPolygon(ctx, canvas, natW, natH, roi);
 
     const perFrame = fullAlert.per_frame_data || [];
     if (perFrame.length === 0) return;
@@ -159,10 +166,8 @@ export default function ReplayView({ alert, lines, source }) {
     const frame = perFrame[lo];
     if (!frame) return;
 
-    const natW = img.naturalWidth || 1920;
-    const natH = img.naturalHeight || 1080;
     drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
-  }, [fullAlert]);
+  }, [fullAlert, roi]);
 
   // Video frame callback sync (file source replay)
   useEffect(() => {
@@ -377,6 +382,33 @@ export default function ReplayView({ alert, lines, source }) {
  * Draw bbox and trajectory trail on a canvas overlay.
  * Shared between video replay and frozen-frame replay.
  */
+function drawRoiPolygon(ctx, canvas, natW, natH, roi) {
+  if (!roi || roi.length < 3) return;
+  const scaleX = canvas.width / natW;
+  const scaleY = canvas.height / natH;
+  const scale = Math.min(scaleX, scaleY);
+  const offsetX = (canvas.width - natW * scale) / 2;
+  const offsetY = (canvas.height - natH * scale) / 2;
+  const tx = (x) => x * scale + offsetX;
+  const ty = (y) => y * scale + offsetY;
+
+  ctx.beginPath();
+  ctx.moveTo(tx(roi[0].x), ty(roi[0].y));
+  for (let i = 1; i < roi.length; i++) {
+    ctx.lineTo(tx(roi[i].x), ty(roi[i].y));
+  }
+  ctx.closePath();
+
+  // Semi-transparent fill
+  ctx.fillStyle = "rgba(0, 255, 255, 0.08)";
+  ctx.fill();
+
+  // Thin border
+  ctx.strokeStyle = "rgba(0, 255, 255, 0.3)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
 function drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert) {
   const scaleX = canvas.width / natW;
   const scaleY = canvas.height / natH;

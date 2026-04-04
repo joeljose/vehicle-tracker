@@ -142,7 +142,10 @@ function ChannelContent() {
         });
         dispatch({ type: "SET_PIPELINE_STARTED", started: data.pipeline_started });
         alertDispatch({ type: "SET_ALERTS", alerts });
-        // Restore entry/exit lines from backend config (survives page reload)
+        // Restore ROI + entry/exit lines from backend config (survives page reload)
+        if (data.roi_polygon && data.roi_polygon.length >= 3) {
+          setRoi(data.roi_polygon.map((p) => ({ x: p[0], y: p[1] })));
+        }
         if (data.entry_exit_lines && Object.keys(data.entry_exit_lines).length > 0) {
           const restored = Object.values(data.entry_exit_lines).map((l) => ({
             label: l.label,
@@ -423,7 +426,7 @@ function ChannelContent() {
         {/* Video / Replay Panel */}
         <div className="flex-1 flex flex-col min-w-0">
           {phase === "review" ? (
-            <ReplayView alert={selectedAlert} lines={lines} source={source} />
+            <ReplayView alert={selectedAlert} lines={lines} roi={roi} source={source} />
           ) : (
             <VideoPanel
               channelId={channelId}
