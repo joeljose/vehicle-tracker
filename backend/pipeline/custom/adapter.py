@@ -437,6 +437,7 @@ class CustomPipeline:
             logger.info("Channel %d: Setup → Analytics", channel_id)
 
         elif new_phase == ChannelPhase.REVIEW:
+            self._persist_last_frame(channel_id)
             self._finalize_channel_state(channel_id)
             if state.decoder:
                 state.decoder.release()
@@ -877,6 +878,22 @@ class CustomPipeline:
 
     def _cleanup_channel_snapshots(self, channel_id: int):
         cleanup_channel_snapshots(channel_id)
+
+    def _persist_last_frame(self, channel_id: int) -> None:
+        """Save the last rendered frame to disk for Phase 3 frozen-frame replay."""
+        from pathlib import Path
+
+        state = self._states.get(channel_id)
+        if state is None or not isinstance(state.last_frame_jpeg, bytes):
+            return
+
+        frame_dir = Path("snapshots") / str(channel_id)
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = frame_dir / "last_frame.jpg"
+        frame_path.write_bytes(state.last_frame_jpeg)
+        logger.info(
+            "Channel %d: persisted last frame (%d bytes)", channel_id, len(state.last_frame_jpeg),
+        )
 
     def _safe_callback(self, callback, *args):
         safe_callback(callback, *args, loop=self._loop)
