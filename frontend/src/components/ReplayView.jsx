@@ -150,7 +150,13 @@ export default function ReplayView({ alert, lines, roi, source }) {
     const firstTs = perFrame[0].timestamp_ms;
     const lastTs = perFrame[perFrame.length - 1].timestamp_ms;
     const duration = lastTs - firstTs;
-    if (duration <= 0) return;
+
+    // Too short to animate — show last known position statically
+    if (duration <= 100) {
+      const frame = perFrame[perFrame.length - 1];
+      drawBboxAndTrajectory(ctx, canvas, natW, natH, frame, fullAlert);
+      return;
+    }
 
     // Loop the animation
     const elapsed = progressMs % (duration + 1000); // 1s pause between loops

@@ -107,6 +107,7 @@ export async function getReplayStatus(alertId) {
   const resp = await fetch(`${BASE}/alert/${alertId}/replay`);
   if (resp.status === 202) return { status: (await resp.json()).status };
   if (resp.status === 200) return { status: "ready" };
+  if (resp.status === 500) return { status: "failed" };
   throw new Error(`Replay error: ${resp.status}`);
 }
 
