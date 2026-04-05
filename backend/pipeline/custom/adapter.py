@@ -66,9 +66,12 @@ class _ChannelState:
     frame_count: int = 0
     infer_count: int = 0
     inference_interval: int = 1  # 1 = every frame, 15 = idle
-    # Frame pacing (file sources only — HLS is self-pacing)
-    next_frame_time: float = 0.0
-    frame_interval: float = 0.0  # seconds per frame (1/fps)
+    # Display pacing — rate-limit MJPEG to real-time (30fps)
+    # Processing runs at full speed; only display is throttled.
+    next_display_time: float = 0.0
+    display_interval: float = 1.0 / 30  # 30fps display
+    # Current PTS from decoder (ms) — used for per_frame_data timestamps
+    current_pts_ms: int = 0
     # Last frame for Phase 3 replay
     last_frame_jpeg: bytes | None = None
 
@@ -265,15 +268,7 @@ class CustomPipeline:
                     self._handle_eos(ch_id)
                     continue
 
-                # Frame pacing: throttle file sources to native FPS
-                if state.frame_interval > 0:
-                    now = time.monotonic()
-                    if state.next_frame_time == 0.0:
-                        state.next_frame_time = now
-                    elif now < state.next_frame_time:
-                        time.sleep(state.next_frame_time - now)
-                    state.next_frame_time += state.frame_interval
-
+                state.current_pts_ms = pts
                 state.frame_count += 1
                 # Frame rate normalization: 60fps source → 30fps inference
                 if state.frame_count % 2 != 0:
@@ -335,9 +330,14 @@ class CustomPipeline:
                             ch_id, mode, state.inference_interval,
                         )
 
-                # Frame callback (~15fps: every other inference frame)
-                if state.infer_count % 2 == 0 and self._frame_callback:
-                    self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
+                # Display callback — rate-limited to 30fps wall-clock
+                if self._frame_callback:
+                    now = time.monotonic()
+                    if now >= state.next_display_time:
+                        self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
+                        if state.next_display_time == 0.0:
+                            state.next_display_time = now
+                        state.next_display_time += state.display_interval
 
                 # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
                 if state.best_photo and state.best_photo.pending_crops:
@@ -380,9 +380,6 @@ class CustomPipeline:
         state.tracker = TrackerWrapper()
         state.stitcher = TrackStitcher()
         state.idle_optimizer = IdleOptimizer()
-        # Frame pacing — throttle decode to source FPS for real-time playback
-        if state.decoder.fps > 0:
-            state.frame_interval = 1.0 / state.decoder.fps
         logger.info("Channel %d: decoder + tracker created", channel_id)
 
     def _do_remove_channel(self, channel_id: int):
@@ -664,7 +661,7 @@ class CustomPipeline:
                     "bbox": list(bbox),
                     "centroid": [cx, cy],
                     "confidence": round(track["confidence"], 3),
-                    "timestamp_ms": int(state.infer_count * (1000 / 30)),
+                    "timestamp_ms": state.current_pts_ms,
                 })
                 state.active_tracks[tid] = {
                     "label": track["class_name"],
@@ -688,7 +685,7 @@ class CustomPipeline:
                     "bbox": list(bbox),
                     "centroid": [cx, cy],
                     "confidence": round(track["confidence"], 3),
-                    "timestamp_ms": int(state.infer_count * (1000 / 30)),
+                    "timestamp_ms": state.current_pts_ms,
                 })
                 ts["roi_active"] = in_roi
 
