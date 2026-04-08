@@ -161,7 +161,8 @@ class NvDecoder:
         )
         # Copy to owned memory — decoder may reuse the surface
         owned = arr.copy()
-        pts_ms = int(frame.getPTS() / 1000) if hasattr(frame, "getPTS") else 0
+        # getPTS() returns 90kHz MPEG ticks — convert to milliseconds
+        pts_ms = int(frame.getPTS() * 1000 / 90000) if hasattr(frame, "getPTS") else 0
         return owned, pts_ms
 
     def _restart(self):
