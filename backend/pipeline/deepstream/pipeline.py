@@ -70,8 +70,7 @@ class TrackingReporter(BatchMetadataOperator):
         self.stagnant_threshold_sec = 150.0
         self.crossings: list[dict] = []  # all crossing events
         self.transit_alerts: list[dict] = []  # completed transit alerts
-        self.frame_count = 0  # counts inference frames (after 60→30 skip)
-        self._raw_frame_count = 0  # counts all decoded frames
+        self.frame_count = 0
         self._current_pts_ms = 0  # PTS of current frame in ms
         self.total_detections = 0
         self.class_counts: dict[str, int] = {}
@@ -118,10 +117,6 @@ class TrackingReporter(BatchMetadataOperator):
                 self.start_time = time.time()
 
             for frame_meta in batch_meta.frame_items:
-                self._raw_frame_count += 1
-                # Frame rate normalization: skip odd frames (60→30fps)
-                if self._raw_frame_count % 2 != 0:
-                    continue
                 self.frame_count += 1
                 # Use PTS for accurate timestamps (ns → ms)
                 self._current_pts_ms = int(frame_meta.buffer_pts / 1_000_000)

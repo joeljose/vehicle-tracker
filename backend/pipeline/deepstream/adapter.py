@@ -89,17 +89,10 @@ class MjpegExtractor(BufferOperator):
         self._callback = callback
         self._reporter = reporter
         self._frame_count = 0
-        self._last_emit_time = 0.0
-        self._min_interval = 1.0 / 15.0  # ~15fps cap
 
     def handle_buffer(self, buffer):
         try:
             self._frame_count += 1
-
-            # Rate limit MJPEG emission to ~15fps
-            now = time.monotonic()
-            if now - self._last_emit_time < self._min_interval:
-                return True
 
             if self._callback is None:
                 return True
@@ -148,7 +141,6 @@ class MjpegExtractor(BufferOperator):
                 )
                 self._callback(result)
 
-            self._last_emit_time = now
             return True
         except Exception as e:
             logger.error("MjpegExtractor: %s", e)
