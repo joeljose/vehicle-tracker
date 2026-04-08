@@ -71,6 +71,7 @@ class _ChannelState:
     display_wall_start: float = 0.0   # wall-clock when first frame displayed
     display_pts_start: int = 0        # PTS of first displayed frame (ms)
     display_started: bool = False
+    last_display_pts: int = 0         # PTS of last emitted frame (ms)
     # Current PTS from decoder (ms) — used for per_frame_data timestamps
     current_pts_ms: int = 0
     # Last frame for Phase 3 replay
@@ -333,21 +334,26 @@ class CustomPipeline:
 
                 # Display callback — synced to video PTS timeline
                 # Processing runs at full speed; display matches real-time.
+                # For live streams (PTS arrives in real-time), this is a no-op gate.
                 if self._frame_callback:
                     now = time.monotonic()
                     if not state.display_started:
                         state.display_wall_start = now
                         state.display_pts_start = pts
+                        state.last_display_pts = pts
                         state.display_started = True
                         self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
                     else:
-                        # How far into the video are we (ms)?
                         video_elapsed_ms = pts - state.display_pts_start
-                        # How far has wall-clock advanced (ms)?
                         wall_elapsed_ms = (now - state.display_wall_start) * 1000
-                        # Only emit if wall-clock has caught up to video time
-                        if wall_elapsed_ms >= video_elapsed_ms:
+                        pts_since_last = pts - state.last_display_pts
+                        # Emit when: wall-clock caught up AND ≥33ms since last emit
+                        if wall_elapsed_ms >= video_elapsed_ms and pts_since_last >= 33:
+                            state.last_display_pts = pts
                             self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
+                        elif video_elapsed_ms > wall_elapsed_ms + 100:
+                            # Processing is >100ms ahead — yield CPU briefly
+                            time.sleep(0.01)
 
                 # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
                 if state.best_photo and state.best_photo.pending_crops:
