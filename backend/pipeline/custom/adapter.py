@@ -66,14 +66,10 @@ class _ChannelState:
     frame_count: int = 0
     infer_count: int = 0
     inference_interval: int = 1  # 1 = every frame, 15 = idle
-    # Display pacing — sync MJPEG to video PTS timeline.
-    # Processing runs at full speed; display emits frames at real-time.
-    display_wall_start: float = 0.0   # wall-clock when first frame displayed
-    display_pts_start: int = 0        # PTS of first displayed frame (ms)
-    display_started: bool = False
-    last_display_pts: int = 0         # PTS of last emitted frame (ms)
     # Current PTS from decoder (ms) — used for per_frame_data timestamps
     current_pts_ms: int = 0
+    # Latest rendered frame (processing writes, display thread reads)
+    latest_frame_result: object | None = None  # FrameResult
     # Last frame for Phase 3 replay
     last_frame_jpeg: bytes | None = None
 
@@ -128,6 +124,10 @@ class CustomPipeline:
             target=self._pipeline_loop, name="custom-pipeline", daemon=True,
         )
         self._thread.start()
+        self._display_thread = threading.Thread(
+            target=self._display_loop, name="custom-display", daemon=True,
+        )
+        self._display_thread.start()
         logger.info("CustomPipeline started")
 
     def stop(self) -> None:
@@ -332,28 +332,9 @@ class CustomPipeline:
                             ch_id, mode, state.inference_interval,
                         )
 
-                # Display callback — synced to video PTS timeline
-                # Processing runs at full speed; display matches real-time.
-                # For live streams (PTS arrives in real-time), this is a no-op gate.
+                # Store latest rendered frame — display thread emits at source FPS
                 if self._frame_callback:
-                    now = time.monotonic()
-                    if not state.display_started:
-                        state.display_wall_start = now
-                        state.display_pts_start = pts
-                        state.last_display_pts = pts
-                        state.display_started = True
-                        self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
-                    else:
-                        video_elapsed_ms = pts - state.display_pts_start
-                        wall_elapsed_ms = (now - state.display_wall_start) * 1000
-                        pts_since_last = pts - state.last_display_pts
-                        # Emit when: wall-clock caught up AND ≥33ms since last emit
-                        if wall_elapsed_ms >= video_elapsed_ms and pts_since_last >= 33:
-                            state.last_display_pts = pts
-                            self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
-                        elif video_elapsed_ms > wall_elapsed_ms + 100:
-                            # Processing is >100ms ahead — yield CPU briefly
-                            time.sleep(0.01)
+                    self._store_display_frame(ch_id, state, nv12, tracks, infer_ms, pts)
 
                 # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
                 if state.best_photo and state.best_photo.pending_crops:
@@ -435,7 +416,6 @@ class CustomPipeline:
             state.frame_count = 0
             state.infer_count = 0
             state.inference_interval = 1
-            state.display_started = False
 
             # Best-photo tracker
             state.best_photo = BestPhotoTracker()
@@ -826,9 +806,9 @@ class CustomPipeline:
             track_ended_callback=lambda t: self._safe_callback(self._track_ended_callback, t),
         )
 
-    # -- Frame emission --
+    # -- Frame rendering + display --
 
-    def _emit_frame(
+    def _store_display_frame(
         self,
         channel_id: int,
         state: _ChannelState,
@@ -837,8 +817,7 @@ class CustomPipeline:
         infer_ms: float,
         pts: int,
     ):
-        """Render annotated frame, build FrameResult, fire callback."""
-        # Decode once, then branch: clean for replay, annotated for MJPEG
+        """Render frame and store as latest for display thread to emit."""
         bgr_frame = self._renderer.decode_nv12(
             nv12, state.decoder.height, state.decoder.width,
         )
@@ -860,7 +839,7 @@ class CustomPipeline:
             for t in tracks
         ]
 
-        result = FrameResult(
+        state.latest_frame_result = FrameResult(
             channel_id=channel_id,
             frame_number=state.infer_count,
             timestamp_ms=pts,
@@ -870,7 +849,29 @@ class CustomPipeline:
             phase=state.phase.value,
             idle_mode=state.idle_optimizer.is_idle if state.idle_optimizer else False,
         )
-        self._safe_callback(self._frame_callback, result)
+
+    def _display_loop(self):
+        """Emit frames to MJPEG clients at source FPS (30fps).
+
+        Runs on a separate thread. Reads latest_frame_result from each
+        channel and fires the frame callback at a steady 30fps rate,
+        independent of how fast the processing loop runs.
+        """
+        interval = 1.0 / 30  # 30fps
+        while self._running:
+            t0 = time.monotonic()
+
+            for ch_id, state in list(self._states.items()):
+                result = state.latest_frame_result
+                if result is not None:
+                    state.latest_frame_result = None
+                    self._safe_callback(self._frame_callback, result)
+
+            # Sleep remainder of interval
+            elapsed = time.monotonic() - t0
+            sleep_time = interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
     # -- Helpers --
 
