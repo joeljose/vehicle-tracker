@@ -66,10 +66,11 @@ class _ChannelState:
     frame_count: int = 0
     infer_count: int = 0
     inference_interval: int = 1  # 1 = every frame, 15 = idle
-    # Display pacing — rate-limit MJPEG to real-time (30fps)
-    # Processing runs at full speed; only display is throttled.
-    next_display_time: float = 0.0
-    display_interval: float = 1.0 / 30  # 30fps display
+    # Display pacing — sync MJPEG to video PTS timeline.
+    # Processing runs at full speed; display emits frames at real-time.
+    display_wall_start: float = 0.0   # wall-clock when first frame displayed
+    display_pts_start: int = 0        # PTS of first displayed frame (ms)
+    display_started: bool = False
     # Current PTS from decoder (ms) — used for per_frame_data timestamps
     current_pts_ms: int = 0
     # Last frame for Phase 3 replay
@@ -330,14 +331,23 @@ class CustomPipeline:
                             ch_id, mode, state.inference_interval,
                         )
 
-                # Display callback — rate-limited to 30fps wall-clock
+                # Display callback — synced to video PTS timeline
+                # Processing runs at full speed; display matches real-time.
                 if self._frame_callback:
                     now = time.monotonic()
-                    if now >= state.next_display_time:
+                    if not state.display_started:
+                        state.display_wall_start = now
+                        state.display_pts_start = pts
+                        state.display_started = True
                         self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
-                        if state.next_display_time == 0.0:
-                            state.next_display_time = now
-                        state.next_display_time += state.display_interval
+                    else:
+                        # How far into the video are we (ms)?
+                        video_elapsed_ms = pts - state.display_pts_start
+                        # How far has wall-clock advanced (ms)?
+                        wall_elapsed_ms = (now - state.display_wall_start) * 1000
+                        # Only emit if wall-clock has caught up to video time
+                        if wall_elapsed_ms >= video_elapsed_ms:
+                            self._emit_frame(ch_id, state, nv12, tracks, infer_ms, pts)
 
                 # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
                 if state.best_photo and state.best_photo.pending_crops:
@@ -419,6 +429,7 @@ class CustomPipeline:
             state.frame_count = 0
             state.infer_count = 0
             state.inference_interval = 1
+            state.display_started = False
 
             # Best-photo tracker
             state.best_photo = BestPhotoTracker()
