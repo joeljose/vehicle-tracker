@@ -68,8 +68,10 @@ class _ChannelState:
     inference_interval: int = 1  # 1 = every frame, 15 = idle
     # Current PTS from decoder (ms) — used for per_frame_data timestamps
     current_pts_ms: int = 0
-    # Latest rendered frame (processing writes, display thread reads)
-    latest_frame_result: object | None = None  # FrameResult
+    # Display FIFO — processing pushes rendered frames, display pops at PTS rate
+    display_queue: Queue = field(default_factory=lambda: Queue(maxsize=5))
+    display_wall_start: float = 0.0  # wall-clock when display started
+    display_pts_start: int = -1      # PTS of first displayed frame (ms)
     # Last frame for Phase 3 replay
     last_frame_jpeg: bytes | None = None
 
@@ -272,9 +274,6 @@ class CustomPipeline:
 
                 state.current_pts_ms = pts
                 state.frame_count += 1
-                # Frame rate normalization: 60fps source → 30fps inference
-                if state.frame_count % 2 != 0:
-                    continue
 
                 # Idle optimization: skip inference if idle
                 if state.inference_interval > 1:
@@ -416,6 +415,7 @@ class CustomPipeline:
             state.frame_count = 0
             state.infer_count = 0
             state.inference_interval = 1
+            state.display_pts_start = -1  # reset display timeline
 
             # Best-photo tracker
             state.best_photo = BestPhotoTracker()
@@ -817,7 +817,14 @@ class CustomPipeline:
         infer_ms: float,
         pts: int,
     ):
-        """Render frame and store as latest for display thread to emit."""
+        """Render frame and push to display FIFO for real-time playback.
+
+        If queue is full (processing ahead of display), skip rendering
+        to avoid wasting CPU on frames the display won't show.
+        """
+        if state.display_queue.full():
+            return  # processing ahead — skip render
+
         bgr_frame = self._renderer.decode_nv12(
             nv12, state.decoder.height, state.decoder.width,
         )
@@ -839,7 +846,7 @@ class CustomPipeline:
             for t in tracks
         ]
 
-        state.latest_frame_result = FrameResult(
+        result = FrameResult(
             channel_id=channel_id,
             frame_number=state.infer_count,
             timestamp_ms=pts,
@@ -849,29 +856,52 @@ class CustomPipeline:
             phase=state.phase.value,
             idle_mode=state.idle_optimizer.is_idle if state.idle_optimizer else False,
         )
+        try:
+            state.display_queue.put_nowait(result)
+        except Exception:
+            pass  # queue full — skip
 
     def _display_loop(self):
-        """Emit frames to MJPEG clients at source FPS (30fps).
+        """Emit frames to MJPEG clients at real-time PTS rate.
 
-        Runs on a separate thread. Reads latest_frame_result from each
-        channel and fires the frame callback at a steady 30fps rate,
-        independent of how fast the processing loop runs.
+        Pops rendered frames from each channel's display FIFO and emits
+        them when wall-clock time matches the frame's PTS. Processing
+        runs at full speed; this thread ensures real-time playback.
         """
-        interval = 1.0 / 30  # 30fps
         while self._running:
-            t0 = time.monotonic()
+            emitted = False
+            now = time.monotonic()
 
             for ch_id, state in list(self._states.items()):
-                result = state.latest_frame_result
-                if result is not None:
-                    state.latest_frame_result = None
-                    self._safe_callback(self._frame_callback, result)
+                if state.display_queue.empty():
+                    continue
 
-            # Sleep remainder of interval
-            elapsed = time.monotonic() - t0
-            sleep_time = interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                # Peek at next frame's PTS
+                try:
+                    result = state.display_queue.queue[0]
+                except (IndexError, AttributeError):
+                    continue
+
+                # Initialize PTS baseline on first frame
+                if state.display_pts_start < 0:
+                    state.display_pts_start = result.timestamp_ms
+                    state.display_wall_start = now
+
+                # Check if it's time to show this frame
+                video_elapsed_ms = result.timestamp_ms - state.display_pts_start
+                wall_elapsed_ms = (now - state.display_wall_start) * 1000
+
+                if wall_elapsed_ms >= video_elapsed_ms:
+                    # Time to emit — pop from queue
+                    try:
+                        result = state.display_queue.get_nowait()
+                    except Exception:
+                        continue
+                    self._safe_callback(self._frame_callback, result)
+                    emitted = True
+
+            if not emitted:
+                time.sleep(0.005)  # 5ms — sub-frame precision
 
     # -- Helpers --
 
