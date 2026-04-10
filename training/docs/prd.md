@@ -4,13 +4,13 @@
 **Version:** 0.1
 **Status:** Draft
 **Last updated:** April 2026
-**Parent project:** Vehicle Tracker (v0.6.0)
+**Parent project:** Vehicle Tracker (v0.7.0)
 
 ---
 
 ## 1. Purpose
 
-This document defines the requirements for training a custom vehicle detection model to replace the pre-trained TrafficCamNet detector used in the Vehicle Tracker system. The trained model will provide finer vehicle class granularity (distinguishing cars, trucks, buses, and motorcycles) and be tuned specifically for the three target traffic junctions.
+This document defines the requirements for fine-tuning the YOLOv8s vehicle detection model used in the Vehicle Tracker system. The fine-tuned model will be trained specifically on our three target traffic junctions, improving detection accuracy (especially for overhead camera angles) compared to the generic COCO-pretrained weights currently used by both backends.
 
 This is a standalone subproject within the Vehicle Tracker repository. Its deliverable is a TensorRT engine file that drops into the existing pipeline.
 
@@ -18,14 +18,12 @@ This is a standalone subproject within the Vehicle Tracker repository. Its deliv
 
 ## 2. Problem Statement
 
-The current detector (TrafficCamNet) has a fundamental limitation: it classifies all vehicles as a single "car" class. There is no distinction between cars, trucks, buses, or motorcycles. This limits the system's value for traffic analysis — an analyst cannot determine vehicle type composition at a junction.
+Both backends currently use YOLOv8s with COCO-pretrained weights, detecting 4 vehicle classes (car, truck, bus, motorcycle). While this works, the COCO-pretrained model has gaps on our junction footage:
+- Overhead/top-down camera angles are underrepresented in COCO training data — missed detections
+- Junction-specific vehicle appearances (stopped vehicles, partial occlusions) not well covered
+- Fine-tuning on site-specific data should improve recall significantly
 
-TrafficCamNet's 4 classes are: `car`, `bicycle`, `person`, `road_sign`. For a traffic monitoring system, the vehicle breakdown matters:
-- Trucks and buses have different traffic impact than cars (size, speed, turning radius)
-- Motorcycle counts are relevant for safety analysis
-- Vehicle type distribution changes by time of day and is a key metric for traffic engineers
-
-We have 5.2 hours of unlabeled video from our 3 target junctions. A fine-tuned model trained on this site-specific data should outperform both TrafficCamNet and a generic COCO-pretrained detector on our footage.
+We have 5.2 hours of unlabeled video from our 3 target junctions. A fine-tuned model trained on this site-specific data should outperform the generic COCO-pretrained weights on our footage.
 
 ---
 
@@ -33,7 +31,7 @@ We have 5.2 hours of unlabeled video from our 3 target junctions. A fine-tuned m
 
 - Train a YOLOv8s model that distinguishes 4 vehicle classes: `car`, `truck`, `bus`, `motorcycle`
 - Use auto-labeling with a strong teacher model (YOLOv8x) to avoid manual annotation of thousands of frames
-- Achieve higher detection accuracy on our junction footage than both TrafficCamNet and pretrained YOLOv8s COCO
+- Achieve higher detection accuracy on our junction footage than pretrained YOLOv8s COCO
 - Export the model to TensorRT FP16 for deployment in the existing pipeline
 - Build a reproducible training pipeline (scripts, configs, documentation) so the model can be retrained as new video data is collected
 - Keep all training inside Docker containers — nothing installed on host
@@ -176,7 +174,7 @@ Dropped from consideration:
 | Docker only | All processing in containers — no host installs |
 | Data privacy | Video is from public traffic cameras — no PII concerns |
 | Labeling budget | Minimal manual labeling — auto-label with teacher model, human review only for flagged frames |
-| Timeline | Complete before M7 (custom pipeline) — M7 uses this model |
+| Timeline | M8 milestone — both backends already use YOLOv8s COCO; fine-tuned model is a drop-in upgrade |
 
 ---
 

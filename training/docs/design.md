@@ -2,10 +2,10 @@
 
 ## 1. Overview
 
-This document describes the technical design for fine-tuning a YOLOv8s vehicle detector on site-specific traffic junction footage. The trained model replaces the pre-trained TrafficCamNet (4 classes: car/bicycle/person/road_sign) with a 6-class detector (car/truck/bus/motorcycle/bicycle/person) tuned for our 3 target junctions.
+This document describes the technical design for fine-tuning a YOLOv8s vehicle detector on site-specific traffic junction footage. The fine-tuned model improves upon the COCO-pretrained YOLOv8s currently used by both backends, especially for overhead camera angles and junction-specific vehicle appearances.
 
 **Input:** 5.2 hours of unlabeled video from 3 junctions (7 files, 2.5 GB)
-**Output:** TensorRT FP16 engine file, drop-in replacement for `models/trafficcamnet_fp16.engine`
+**Output:** TensorRT FP16 engine file, drop-in replacement for `models/yolov8s.onnx` (both backends)
 **Classes:** 4 — `car`, `truck` (includes trailers), `bus`, `motorcycle`
 
 ---
