@@ -48,7 +48,7 @@ Two pipeline implementations exist — DeepStream (primary) and custom (secondar
                      |                           |
           +----------+----------+     +----------+----------+
           | DeepStream Pipeline |     |  Custom Pipeline    |
-          |    (primary, M1)    |     |   (secondary, M9)   |
+          |    (primary, M1)    |     |   (secondary, M7)   |
           +---------------------+     +---------------------+
 ```
 
@@ -826,9 +826,9 @@ NvDCF:
 
 `maxShadowTrackingAge=60-90` frames (2-3 seconds at 30fps) maintains a prediction of occluded vehicles' positions. When a vehicle reappears near the predicted location, the original track ID is preserved rather than creating a new ID.
 
-### 10.2 Custom Pipeline: ByteTrack
+### 10.2 Custom Pipeline: BoT-SORT
 
-ByteTrack with extended `track_buffer` for the same purpose:
+BoT-SORT with extended `track_buffer` for the same purpose:
 
 ```python
 tracker = BYTETracker(
@@ -1471,12 +1471,12 @@ backend/
 │   │   ├── pipeline.py            # GStreamer pipeline construction + element linking
 │   │   ├── probes.py              # Pad probe functions (phase routing, analytics)
 │   │   └── config.py              # DeepStream config file generation (nvinfer, tracker)
-│   ├── custom/                    # Custom pipeline (secondary, M9)
+│   ├── custom/                    # Custom pipeline (secondary, M7)
 │   │   ├── pipeline.py            # Main loop: decode -> batch -> infer -> track -> route
 │   │   ├── decoder.py             # NVDEC wrapper (hardware decode)
 │   │   ├── preprocess.py          # CUDA NV12->RGB, resize, normalize
 │   │   ├── detector.py            # TensorRT YOLOv8s inference
-│   │   └── tracker.py             # ByteTrack wrapper
+│   │   └── tracker.py             # BoT-SORT wrapper
 │   ├── source_resolver.py         # YouTube URL → HLS resolution via yt-dlp, liveness check, quality listing
 │   ├── direction.py               # Line-crossing detection, direction state machine, inference
 │   ├── snapshot.py                # Best-photo scoring, cropping, in-memory storage
@@ -1611,9 +1611,9 @@ Key configuration:
 - ReID features: color names + HOG descriptors
 - Batch processing across all channels
 
-### Custom: ByteTrack
+### Custom: BoT-SORT
 
-ByteTrack runs on CPU. One instance per channel, stored in a dict keyed by channel_id.
+BoT-SORT runs on CPU. One instance per channel, stored in a dict keyed by channel_id.
 
 - At 20-40 active tracks, CPU execution is faster than GPU kernel launch overhead.
 - `track_buffer=90` frames (3 seconds) for lost track retention.
@@ -1660,7 +1660,7 @@ class TrajectoryBuffer:
 | Detection (DeepStream) | TrafficCamNet via nvinfer | Native DeepStream model |
 | Detection (custom) | YOLOv8s -> TensorRT INT8 | Ultralytics export |
 | Tracking (DeepStream) | NvDCF (nvtracker) | GPU, ReID features |
-| Tracking (custom) | ByteTrack | CPU, Kalman + IoU |
+| Tracking (custom) | BoT-SORT | CPU, Kalman + IoU |
 | Line analytics (DeepStream) | Custom Python probe (direction.py) | Cross-product line-crossing algorithm |
 | Line analytics (custom) | Custom Python (direction.py) | Cross-product algorithm |
 | Annotation (DeepStream) | nvdsosd | GStreamer element, GPU rendering |
@@ -1767,7 +1767,7 @@ git tag v0.2.0    →  version = "0.2.0"
 | M4 | 0.4.0 | DeepStream-FastAPI integration |
 | M5 | 0.5.0 | Multi-channel shared pipeline |
 | M6 | 0.6.0 | YouTube Live streams |
-| M7 | 0.7.0 | Custom pipeline (NVDEC + TensorRT + ByteTrack) |
+| M7 | 0.7.0 | Custom pipeline (NVDEC + TensorRT + BoT-SORT) |
 | M8 | 0.8.0 | Custom model training (YOLOv8s fine-tune, 4 vehicle classes) |
 | M9 | 0.9.0 | Polish (trajectory overlay, profiling, error handling) |
 
@@ -1926,6 +1926,6 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | **M4** | DeepStream-FastAPI integration | DeepStreamPipeline adapter (PipelineBackend Protocol), per-channel pipeline lifecycle, MjpegExtractor for GPU->JPEG, real-time alerts, clip extraction for replay, EOS auto-transition. 312 tests. **COMPLETE (v0.4.0).** |
 | **M5** | Multi-channel | Shared pipeline: nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG. Dynamic source add/remove. BatchMetadataRouter. Per-source EOS. 336 tests. **COMPLETE (v0.5.0).** |
 | **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, stream recovery with circuit breaker, serialized yt-dlp calls, last-frame buffer for Phase 3 frozen-frame replay. 371 tests. **COMPLETE (v0.6.0).** |
-| **M7** | Custom pipeline | NVDEC + TensorRT + ByteTrack pipeline, same API contract as DeepStream |
+| **M7** | Custom pipeline | NVDEC + TensorRT + BoT-SORT pipeline, same API contract as DeepStream |
 | **M8** | Custom model training | Auto-label junction video, fine-tune YOLOv8s (4 classes: car/truck/bus/motorcycle), TensorRT FP16 engine. See `training/docs/`. |
 | **M9** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |

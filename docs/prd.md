@@ -1,9 +1,9 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.6
-**Status:** M6 Complete (v0.6.0)
-**Last updated:** March 2026
+**Version:** 0.7
+**Status:** M7 Complete (v0.7.0)
+**Last updated:** April 2026
 
 ---
 
@@ -147,12 +147,12 @@ Each channel independently progresses through four phases. Multiple channels can
 | ID | Requirement | Priority |
 |---|---|---|
 | F-09 | v1 uses pre-trained models only -- no finetuning required to start | Must |
-| F-10 | DeepStream pipeline uses NVIDIA TrafficCamNet as the primary detector | Must |
+| F-10 | Both backends use YOLOv8s (COCO-pretrained, FP16) as the detector | Must |
 | F-11 | Custom pipeline uses YOLOv8s (COCO pre-trained) compiled to TensorRT INT8 | Must |
 | F-12 | Video is decoded using hardware decoder (NVDEC for custom pipeline, DeepStream's internal decoder for DS pipeline) | Must |
 | F-13 | Detection confidence threshold is configurable at runtime from the UI | Must |
 | F-14 | The model can be replaced by dropping a new model file -- no code change required | Should |
-| F-15 | Vehicle classes detected depend on the chosen model: TrafficCamNet (DeepStream) detects a single "car" class encompassing all vehicle types; YOLOv8s COCO (custom pipeline) detects car, truck, bus, motorcycle separately. Typed vehicle classes with DeepStream require finetuning or a secondary classifier (v2). | Must |
+| F-15 | Both backends use YOLOv8s COCO detecting car (2), motorcycle (3), bus (5), truck (7). DeepStream uses a custom C++ bbox parser for nvinfer; Custom uses direct TRT inference with CPU NMS. | Must |
 | F-16 | Idle optimization: when zero detections persist for 1 second (30 frames), inference drops to every 15th frame; any detection immediately restores full-rate inference; inference is never skipped while active tracks exist | Must |
 
 ### 8.3 Tracking
@@ -417,9 +417,9 @@ Browser opens -> WebSocket connects -> operator adds channels -> draws ROI/lines
 
 | Aspect | DeepStream Pipeline | Custom Pipeline |
 |---|---|---|
-| **Framework** | NVIDIA DeepStream SDK (GStreamer-based) | NVDEC + TensorRT + ByteTrack (manual integration) |
-| **Detector** | TrafficCamNet (built-in, no finetuning needed) | YOLOv8s COCO (TensorRT INT8) |
-| **Tracker** | NvDCF with ReID, `maxShadowTrackingAge=60-90` | ByteTrack on CPU with extended `track_buffer` |
+| **Framework** | NVIDIA DeepStream SDK (GStreamer-based) | NVDEC + TensorRT + BoT-SORT (Python pipeline) |
+| **Detector** | YOLOv8s COCO (custom C++ parser for nvinfer) | YOLOv8s COCO (direct TensorRT + CPU NMS) |
+| **Tracker** | NvDCF with ReID, `maxShadowTrackingAge=150` | BoT-SORT on CPU with HSV histogram ReID, `track_buffer=150` |
 | **Decode** | DeepStream internal (nvv4l2decoder) | NVDEC via Video Codec SDK or PyNvCodec |
 | **Multi-channel** | `nvstreammux` batches sources natively | Manual batching of decoded frames |
 | **Phase routing** | GStreamer pad probe on `frame_meta.source_id` | if/elif after inference |
@@ -554,7 +554,7 @@ duration_ms, frames_stationary
 | M4 -- DeepStream-FastAPI integration | DeepStreamPipeline adapter class implementing PipelineBackend Protocol. Per-channel pipeline lifecycle (preview -> analytics -> review). MjpegExtractor BufferOperator for GPU->JPEG at ~15fps. Real-time alert delivery via callbacks. Clip extraction with ffmpeg for replay. EOS auto-transition with phase callback. 312 tests. **COMPLETE (v0.4.0).** | M3 |
 | M5 -- Multi-channel | Shared pipeline: `nvstreammux` → `nvinfer` → `nvtracker` → `nvstreamdemux` → per-channel OSD/MJPEG branches. Dynamic source add/remove via `nvurisrcbin`. `BatchMetadataRouter` probe routes batched metadata by `source_id` to per-channel `TrackingReporter`. Phase transitions swap sources (loop→play-once). Per-source EOS for independent channel lifecycle. Validated for 2 channels on RTX 4050 (~459 MB shared VRAM). Zero frontend changes. 336 tests. **COMPLETE (v0.5.0).** | M4 |
 | M6 -- YouTube Live streams | YouTube Live URL resolution via `yt-dlp` (async, best quality only), HLS stream consumption via `nvurisrcbin`, stream recovery with circuit breaker, serialized `yt-dlp` calls, last-frame buffer for Phase 3 frozen-frame replay. E2E validated on live 741 & Lytle South traffic camera. 371 tests. **COMPLETE (v0.6.0).** | M5 |
-| M7 -- Custom pipeline | Alternative pipeline: NVDEC + TensorRT + ByteTrack. Same API contract as DeepStream pipeline. Verified against same test videos. | M2 |
+| M7 -- Custom pipeline | Alternative GPU-resident pipeline: NVDEC decode, CuPy preprocess, direct TensorRT YOLOv8s inference, vendored BoT-SORT tracking (HSV histogram ReID), shared analytics modules. Same PipelineBackend Protocol as DeepStream. Docker image 5.9 GB (vs 37.8 GB). Decoupled processing/display threads. **COMPLETE (v0.7.0).** | M2 |
 | M8 -- Custom model training | Auto-label 5.2 hrs of junction video with YOLOv8x teacher, fine-tune YOLOv8s on 4 vehicle classes (car, truck, bus, motorcycle), export TensorRT FP16 engine. PRD and design doc at `training/docs/`. | M6 |
 | M9 -- Polish | Remaining widgets (trajectory overlay, track count chart), annotated video export, profiling, error states in UI, graceful shutdown. | M8 |
 

@@ -67,12 +67,12 @@ The custom pipeline solves these by using standard, well-documented Python libra
 docker-compose.dev.yml:
   backend:
     environment:
-      - PIPELINE_BACKEND=custom    # or "deepstream" (default)
+      - VT_BACKEND=custom    # or "deepstream" (default)
 ```
 
 ```python
 # main.py — backend selection
-if os.environ.get("PIPELINE_BACKEND") == "custom":
+if os.environ.get("VT_BACKEND") == "custom":
     from backend.pipeline.custom.adapter import CustomPipeline as Backend
 else:
     from backend.pipeline.deepstream.adapter import DeepStreamPipeline as Backend
@@ -265,7 +265,7 @@ BoT-SORT produces integer track IDs that reset per-tracker instance. The adapter
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| C-33 | Backend selection via `PIPELINE_BACKEND` env var | Must |
+| C-33 | Backend selection via `VT_BACKEND` env var | Must |
 | C-34 | All dependencies installed in existing backend Docker container | Must |
 | C-35 | Makefile targets unchanged — `make start`, `make test`, etc. work for both backends | Must |
 | C-36 | All existing FakeBackend tests pass (API contract tests) | Must |
@@ -353,8 +353,8 @@ backend/pipeline/custom/
 ```
 backend/Dockerfile         # add cupy, pynvvideocodec to pip install
 backend/requirements.txt   # add cupy, pynvvideocodec
-backend/main.py            # backend selection via PIPELINE_BACKEND env var
-docker-compose.dev.yml     # add PIPELINE_BACKEND env var
+backend/main.py            # backend selection via VT_BACKEND env var
+docker-compose.dev.yml     # add VT_BACKEND env var
 Makefile                   # optionally: make start-custom / make start-deepstream shortcuts
 ```
 

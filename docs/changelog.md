@@ -3,6 +3,39 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-04-05
+
+### Added
+- Custom GPU-resident pipeline: NVDEC + CuPy + direct TensorRT + BoT-SORT
+- Vendored BoT-SORT tracker (no ultralytics/torch dependency)
+- HSV histogram ReID encoder for appearance-based track matching
+- Container split: Dockerfile.custom (5.9 GB) vs Dockerfile.deepstream (37.8 GB)
+- YouTube Live HLS decode via GStreamer FIFO + PyNvVideoCodec
+- Stream recovery with CircuitBreaker (reused from DeepStream)
+- Shared pipeline utilities (shared.py): get_snapshot, check_crossings, finalize_lost_track, parse_lines
+- Decoupled processing/display threads with PTS-based FIFO for real-time playback
+- YOLOv8s custom C++ bbox parser for DeepStream nvinfer (both backends now use same model)
+- ROI polygon overlay in Analytics and Review (frontend-only, common to both backends)
+- exp15 resource comparison benchmark
+- Custom model training PRD and design doc (training/docs/)
+
+### Changed
+- DeepStream detector swapped from TrafficCamNet to YOLOv8s for fair comparison
+- Display rate: source FPS via PTS timing (was hardcoded 15fps)
+- per_frame_data timestamps use decoder PTS (was computed from frame count)
+- Clip extraction uses per_frame_data timestamps (fps-agnostic)
+- Docker image optimized: 10.6 GB → 5.9 GB (--no-install-recommends, strip .so, no ultralytics/torch)
+
+### Fixed
+- Same-arm crossing rejection (prevents false N→N / E→E alerts from bbox jitter)
+- COMPLETED state in DirectionStateMachine (prevents duplicate alerts)
+- Snapshot RGB→BGR conversion + disk fallback
+- Clean last_frame.jpg for frozen-frame replay (no analytics overlays)
+- Stitcher merge inherits per_frame_data (replay animation for merged tracks)
+- Replay bbox timing (only between first/last detection)
+- MJPEG reconnect on phase transition (cache-busting query param)
+- PTS conversion: 90kHz MPEG ticks → milliseconds
+
 ## [0.6.0] - 2026-03-31
 
 ### Added
