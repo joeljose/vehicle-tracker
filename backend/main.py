@@ -164,5 +164,5 @@ def create_app(backend: str = "deepstream") -> FastAPI:
 if __name__ == "__main__":
     import uvicorn
 
-    app = create_app(backend=os.environ.get("VT_BACKEND", "deepstream"))
+    app = create_app(backend=os.environ.get("VT_BACKEND", "custom"))
     uvicorn.run(app, host="0.0.0.0", port=8000)

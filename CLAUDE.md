@@ -2,7 +2,7 @@
 
 ## Environment
 - **ALL development happens inside Docker containers.** Never install dependencies on the host.
-- Two backend containers, selected via `VT_BACKEND` env var (default: `deepstream`):
+- Two backend containers, selected via `VT_BACKEND` env var (default: `custom`):
   - **Custom** (`Dockerfile.custom`): `nvidia/cuda:12.6.3-runtime-ubuntu24.04` + GStreamer + TRT (~5.9 GB, vendored BoT-SORT, no ultralytics/torch)
   - **DeepStream** (`Dockerfile.deepstream`): `nvcr.io/nvidia/deepstream:8.0-gc-triton-devel` (37.8 GB)
 - Both backends use YOLOv8s (COCO-pretrained, FP16) for detection
