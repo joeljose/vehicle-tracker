@@ -164,5 +164,9 @@ def create_app(backend: str = "deepstream") -> FastAPI:
 if __name__ == "__main__":
     import uvicorn
 
+    logging.basicConfig(
+        level=os.environ.get("VT_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     app = create_app(backend=os.environ.get("VT_BACKEND", "custom"))
     uvicorn.run(app, host="0.0.0.0", port=8000)
