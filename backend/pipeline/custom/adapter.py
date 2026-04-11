@@ -17,7 +17,7 @@ from typing import Callable
 import numpy as np
 
 from backend.pipeline.custom.decoder import NvDecoder
-from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES, TRTDetector
+from backend.pipeline.custom.detector import TRTDetector
 from backend.pipeline.stream_recovery import CircuitBreaker
 from backend.pipeline.custom.engine_builder import ensure_engine
 from backend.pipeline.custom.preprocess import GpuPreprocessor, nv12_to_bgr_gpu, nv12_to_rgb_gpu

@@ -99,13 +99,13 @@ class TrackerWrapper:
             cx = int(x1 + w / 2)
             cy = int(y1 + h / 2)
 
-            from backend.pipeline.custom.detector import COCO_VEHICLE_CLASSES
+            from backend.pipeline.custom.detector import PROJECT_CLASS_NAMES
 
             tracks.append({
                 "track_id": seq_tid,
                 "bbox": (int(x1), int(y1), int(w), int(h)),
                 "confidence": conf,
-                "class_name": COCO_VEHICLE_CLASSES.get(cls_id, f"class_{cls_id}"),
+                "class_name": PROJECT_CLASS_NAMES.get(cls_id, f"class_{cls_id}"),
                 "class_id": cls_id,
                 "centroid": (cx, cy),
                 "bbox_xyxy": (int(x1), int(y1), int(x2), int(y2)),

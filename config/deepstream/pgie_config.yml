@@ -1,18 +1,32 @@
 property:
   gpu-id: 0
   net-scale-factor: 0.00392156862745098
-  onnx-file: /app/models/yolov8s.onnx
-  model-engine-file: /app/models/yolov8s_ds.engine
+  # M8-P1.5 v2: fine-tuned single-class student from training/runs/detect/yolov8s_rfdetr_v1_cont.
+  # nvinfer auto-builds the engine from the ONNX at first startup using the
+  # DS-bundled TRT 10.9.0.34 and caches to model-engine-file for subsequent starts.
+  onnx-file: /app/models/yolov8s_rfdetr_v1_cont.onnx
+  # nvinfer auto-names the built engine as <onnx>_b<N>_gpu<N>_<precision>.engine,
+  # so point model-engine-file at that exact path — otherwise the lookup misses
+  # and TRT rebuilds the engine on every startup (~150s).
+  model-engine-file: /app/models/yolov8s_rfdetr_v1_cont.onnx_b1_gpu0_fp16.engine
   labelfile-path: /app/config/deepstream/labels.txt
   batch-size: 1
   network-mode: 2
-  num-detected-classes: 80
+  # Single class: vehicle (id 0). Was 80 under the COCO-pretrained yolov8s.
+  num-detected-classes: 1
   interval: 0
   gie-unique-id: 1
+  # cluster-mode=4 (CLUSTER_NONE): the custom parser already runs NMS, so
+  # nvinfer passes detections straight through without re-clustering.
   cluster-mode: 4
   infer-dims: 3;640;640
   maintain-aspect-ratio: 1
   symmetric-padding: 1
-  parse-func: 0
   custom-lib-path: /app/backend/deepstream_parsers/libnvds_parse_yolov8.so
   parse-bbox-func-name: NvDsInferParseYoloV8
+
+# Per-class thresholds. Even under CLUSTER_NONE, nvinfer applies the
+# preClusterThreshold filter (default 0.2) after the parser. Set it
+# explicitly so the threshold matches CONF_THRESH in the parser.
+class-attrs-all:
+  pre-cluster-threshold: 0.25

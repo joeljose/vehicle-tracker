@@ -37,8 +37,11 @@ from backend.pipeline.trajectory import TrajectoryBuffer
 # Max per-frame data entries per track (matches TrajectoryBuffer default)
 _MAX_PER_FRAME_DATA = 300
 
-# COCO vehicle class IDs (matching Custom backend)
-VEHICLE_CLASS_IDS = {2, 3, 5, 7}  # car, motorcycle, bus, truck
+# Project class IDs that count as a "vehicle" at runtime.
+# Under the M8-P1.5 v2 single-class fine-tuned student, the only class id
+# produced by the custom YOLO parser is 0 (vehicle), and all of them are
+# vehicles by construction. Kept as a set for easy future extension.
+VEHICLE_CLASS_IDS = {0}
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +127,9 @@ class TrackingReporter(BatchMetadataOperator):
                 seen_track_ids = set()
 
                 for obj_meta in frame_meta.object_items:
-                    # Filter to vehicle classes only (COCO: car, motorcycle, bus, truck)
+                    # Single-class model: class 0 = vehicle. The filter is a
+                    # belt-and-braces guard in case the parser ever emits
+                    # anything else; under normal operation it's a no-op.
                     if obj_meta.class_id not in VEHICLE_CLASS_IDS:
                         continue
 

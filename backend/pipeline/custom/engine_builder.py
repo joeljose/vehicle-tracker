@@ -10,8 +10,13 @@ import os
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ONNX_PATH = "/app/models/yolov8s.onnx"
-DEFAULT_ENGINE_PATH = "/app/models/yolov8s_direct.engine"
+# M8-P1.5 v2: point at the fine-tuned single-class student ONNX.
+# Training produces this file via `make train-export-onnx RUN=yolov8s_rfdetr_v1_cont`
+# and drops it in /app/models/ (mounted at /models inside the training container).
+# The engine is built here at backend startup using this container's TRT version
+# (tensorrt 10.16.0.72), and cached next to the ONNX for subsequent starts.
+DEFAULT_ONNX_PATH = "/app/models/yolov8s_rfdetr_v1_cont.onnx"
+DEFAULT_ENGINE_PATH = "/app/models/yolov8s_rfdetr_v1_cont_custom.engine"
 
 
 def _file_hash(path: str) -> str:

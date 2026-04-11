@@ -2,6 +2,12 @@
 
 Loads a TRT engine, runs inference with GPU tensors in/out,
 then performs NMS on CPU. No Ultralytics wrapper.
+
+M8-P1.5 v2: the deployed model is a single-class fine-tuned YOLOv8s
+(project class 0 = vehicle). Output tensor shape is (1, 5, 8400) rather
+than the COCO-pretrained (1, 84, 8400): 4 bbox coords + 1 class score
+per anchor. All detections are vehicles by construction, so we no
+longer filter on COCO vehicle ids 2/3/5/7.
 """
 
 import logging
@@ -14,9 +20,10 @@ from backend.pipeline.custom.preprocess import ScaleInfo
 
 logger = logging.getLogger(__name__)
 
-# COCO class names for vehicle classes
-COCO_VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
-VEHICLE_CLASS_IDS = list(COCO_VEHICLE_CLASSES.keys())
+# Single-class model: the only project class id is 0 = "vehicle".
+# Kept as a module-level constant for anything downstream that still
+# wants a human-readable name.
+PROJECT_CLASS_NAMES = {0: "vehicle"}
 
 
 class TRTDetector:
@@ -80,19 +87,27 @@ class TRTDetector:
         self._conf_thresh = threshold
 
     def _postprocess(self, output: np.ndarray, scale_info: ScaleInfo) -> np.ndarray:
-        """NMS on CPU. output shape: (1, 84, 8400)."""
-        preds = output[0].T  # (8400, 84)
+        """NMS on CPU.
+
+        Output tensor shape is (1, 5, 8400) for our 1-class fine-tuned
+        model: 4 bbox coords + 1 class score per anchor. The transpose
+        below yields (8400, 5); we slice the first 4 as cxcywh and the
+        last 1 as the confidence directly — no argmax needed because
+        there is only one class.
+        """
+        preds = output[0].T  # (8400, 5)
 
         boxes_cxcywh = preds[:, :4]
-        class_scores = preds[:, 4:]
+        class_scores = preds[:, 4:]        # (8400, 1)
 
-        max_scores = class_scores.max(axis=1)
-        class_ids = class_scores.argmax(axis=1)
+        # Single-class: the "max score" is just the one score per anchor,
+        # and every detection has class id 0.
+        max_scores = class_scores[:, 0]
+        class_ids = np.zeros(len(preds), dtype=np.int32)
 
-        # Filter by confidence + vehicle classes
+        # Filter by confidence only. No vehicle-class filter — everything
+        # the model emits is already a vehicle by construction.
         mask = max_scores > self._conf_thresh
-        class_mask = np.isin(class_ids, VEHICLE_CLASS_IDS)
-        mask = mask & class_mask
 
         boxes_cxcywh = boxes_cxcywh[mask]
         scores = max_scores[mask]
