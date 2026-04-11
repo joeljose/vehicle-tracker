@@ -1,0 +1,48 @@
+# Site → video mapping for training pipeline.
+# Each junction has 7 videos (1×20 min + 6×30 min). Total: 200 min/site, 600 min overall.
+# Inventory captured 2026-04-10 from data_collection/site_videos/.
+# Site slugs satisfy ^[a-zA-Z0-9_-]+$ (matches backend/config/site_config.py validation).
+#
+# Source FPS varies by junction:
+#   junction_741_73           : 60 fps
+#   junction_741_lytle_south  : 30 fps
+#   junction_drugmart_73      : 60 fps
+# This is irrelevant to the current pipeline because `ffmpeg -vf fps=1` is
+# wall-clock based — all sites yield one frame per second regardless. Lytle
+# South frames may have slightly more motion blur (~33 ms exposure vs ~16 ms).
+# If you ever change extraction to a source-frame stride (e.g. `select=not(mod(n,N))`),
+# you MUST normalize per source FPS or you'll halve Lytle's coverage.
+
+sites:
+  junction_741_73:
+    display_name: "741 & 73"
+    videos:
+      - "Live Traffic @ 741 & 73 2026-03-26 00_03 2024-06-17 183336.mp4"
+      - "Live Traffic @ 741 & 73 2026-03-30 20_26 2024-06-17 145655.mp4"
+      - "Live Traffic @ 741 & 73 2026-03-31 17_52 2024-06-17 122253.mp4"
+      - "Live Traffic @ 741 & 73 2026-03-31 20_55 2024-06-17 152554.mp4"
+      - "Live Traffic @ 741 & 73 2026-03-31 21_58 2024-06-17 162850.mp4"
+      - "Live Traffic @ 741 & 73 2026-04-04 20_36 2024-06-17 150653.mp4"
+      - "Live Traffic @ 741 & 73 2026-04-05 03_01 2024-06-17 213130.mp4"
+
+  junction_741_lytle_south:
+    display_name: "741 & Lytle South"
+    videos:
+      - "Live Traffic @ 741 & Lytle South 2026-03-26 00_03 2026-01-25 183334.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-03-30 20_26 2026-01-25 145654.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-03-31 17_52 2026-01-25 122255.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-03-31 20_55 2026-01-25 152553.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-03-31 22_14 2026-01-25 164404.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-04-04 20_36 2026-01-25 150657.mp4"
+      - "Live Traffic @ 741 & Lytle South 2026-04-05 03_01 2026-01-25 213129.mp4"
+
+  junction_drugmart_73:
+    display_name: "Drugmart & 73"
+    videos:
+      - "Live Traffic @ Drugmart & 73 2026-03-26 00_03 2024-06-17 183337.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-03-30 20_26 2024-06-17 145655.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-03-31 17_52 2024-06-17 122256.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-03-31 20_55 2024-06-17 152554.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-03-31 22_09 2024-06-17 163934.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-04-04 20_36 2024-06-17 150653.mp4"
+      - "Live Traffic @ Drugmart & 73 2026-04-05 03_01 2024-06-17 213131.mp4"

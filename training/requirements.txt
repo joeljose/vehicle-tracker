@@ -1,0 +1,23 @@
+ultralytics>=8.3
+imagededup>=0.3
+# opencv-python (not headless) so build_benchmark.py can use cv2.imshow.
+# Bundles its own Qt5; needs X11 forwarding from host (see docker-compose.training.yml).
+opencv-python>=4.10
+numpy>=1.26
+PyYAML>=6.0
+# Teacher bake-off (M8-P1.5)
+rfdetr>=1.0
+transformers>=4.40
+pycocotools>=2.0
+# ONNX export (model hand-off to the backend containers).
+# NOTE: the training container DELIBERATELY does not install `tensorrt`.
+# Engine construction is the responsibility of each backend container,
+# because TRT engines are version-specific and the two backends use
+# different TRT versions:
+#   - backend/Dockerfile.custom     → TRT 10.16.0.72 (pip-installed)
+#   - backend/Dockerfile.deepstream → TRT 10.9.0.34  (DS 8.0 apt bundle)
+# Training produces a single portable ONNX; each backend builds its
+# own engine from it at container startup via their respective
+# auto-build paths (engine_builder.py / nvinfer onnx-file).
+onnx>=1.16
+onnxslim>=0.1

@@ -10,6 +10,11 @@ COMPOSE := docker compose -f docker-compose.dev.yml -f docker-compose.$(BACKEND_
 BACKEND := $(COMPOSE) exec backend
 FRONTEND := $(COMPOSE) exec frontend
 
+TRAIN_COMPOSE := docker compose -f docker-compose.training.yml
+TRAIN := $(TRAIN_COMPOSE) exec training
+
+LS_COMPOSE := docker compose -f docker-compose.label-studio.yml
+
 # Clip extraction defaults
 START    ?= 0
 DURATION ?= 60
@@ -18,7 +23,12 @@ FPS      ?= 30
 .PHONY: help setup dev down clean rebuild \
         start stop-server restart logs \
         shell shell-frontend test test-v lint format \
-        status clip tag version
+        status clip tag version \
+        training-build training-up training-down training-shell \
+        train-extract train-dedup train-label train-split train-student train-student-continue train-export-onnx \
+        train-compare-sample train-compare-run train-compare-run-all \
+        train-compare-stats train-compare \
+        train-ls-up train-ls-down train-ls-compare-setup train-ls-export
 
 ## —— Setup & Lifecycle ——————————————————————————
 
@@ -47,7 +57,8 @@ down: ## Stop all containers
 
 clean: ## Stop containers and remove caches, snapshots, build artifacts
 	$(COMPOSE) down -v --remove-orphans 2>/dev/null || true
-	rm -rf .ds-cache .custom-cache .node-cache snapshots frontend/.vite frontend/node_modules/.vite
+	$(TRAIN_COMPOSE) down -v --remove-orphans 2>/dev/null || true
+	rm -rf .ds-cache .custom-cache .node-cache .training-cache snapshots frontend/.vite frontend/node_modules/.vite
 	@echo "Cleaned up. Run 'make setup' to start fresh."
 
 rebuild: ## Force rebuild Docker images (use after Dockerfile changes)
@@ -113,6 +124,103 @@ clip: ## Extract a test clip. Usage: make clip SRC="path/to/video.mp4" START=30 
 	@test -n "$(SRC)" || (echo "Usage: make clip SRC=\"path/to/video.mp4\" START=30 DURATION=60 OUT=\"clip.mp4\"" && exit 1)
 	@test -n "$(OUT)" || (echo "Error: OUT is required" && exit 1)
 	$(BACKEND) ffmpeg -ss $(START) -t $(DURATION) -i "$(SRC)" -c copy "$(OUT)" -y
+
+## —— Training ————————————————————————————————————
+
+training-build: ## Build training image
+	$(TRAIN_COMPOSE) build
+
+training-up: ## Start training container (idle)
+	@mkdir -p .training-cache/.config/Ultralytics
+	$(TRAIN_COMPOSE) up -d
+
+training-down: ## Stop training container
+	$(TRAIN_COMPOSE) down
+
+training-shell: ## Shell into training container
+	$(TRAIN) bash
+
+train-extract: ## Extract frames from site videos (1 FPS)
+	$(TRAIN) python3 scripts/extract_frames.py
+
+train-dedup: ## Dedupe extracted frames (CNN perceptual hash)
+	$(TRAIN) python3 scripts/dedup_frames.py
+
+train-label: ## Auto-label deduped frames with the chosen teacher (TEACHER=yolov8x default)
+	$(TRAIN) python3 scripts/auto_label.py --teacher $(or $(TEACHER),yolov8x)
+
+train-split: ## Build stratified train/val/test split + dataset.yaml
+	$(TRAIN) python3 scripts/split_dataset.py
+
+train-student: ## Fine-tune YOLOv8s on the RF-DETR auto-labels (fresh run)
+	$(TRAIN) python3 scripts/train_student.py --mode fresh $(ARGS)
+
+train-student-continue: ## Continue an existing run. Usage: make train-student-continue FROM=yolov8s_rfdetr_v1
+	@test -n "$(FROM)" || (echo "Usage: make train-student-continue FROM=<run_name> [ARGS=...]" && exit 1)
+	$(TRAIN) python3 scripts/train_student.py --mode continue --from $(FROM) $(ARGS)
+
+train-export-onnx: ## Export a trained run's best.pt to ONNX for backend consumption. Usage: make train-export-onnx RUN=yolov8s_rfdetr_v1_cont
+	@test -n "$(RUN)" || (echo "Usage: make train-export-onnx RUN=<run_name>" && exit 1)
+	$(TRAIN) python3 scripts/export_onnx.py --run $(RUN)
+
+## —— P1.5 v2 Teacher comparison ————————————————————
+
+train-compare-sample: ## Sample 1000 frames into data/comparison/
+	$(TRAIN) python3 scripts/build_comparison_set.py
+
+train-compare-run: ## Run one teacher on the comparison set. Usage: make train-compare-run TEACHER=yolo26x
+	@test -n "$(TEACHER)" || (echo "Usage: make train-compare-run TEACHER=<name>" && exit 1)
+	$(TRAIN) python3 scripts/run_comparison.py --teacher $(TEACHER)
+
+train-compare-run-all: ## Run all 5 teachers on the comparison set
+	$(TRAIN) python3 scripts/run_comparison.py --teacher yolov8x
+	$(TRAIN) python3 scripts/run_comparison.py --teacher yolo26x
+	$(TRAIN) python3 scripts/run_comparison.py --teacher yolo12x
+	$(TRAIN) python3 scripts/run_comparison.py --teacher rfdetr_m
+	$(TRAIN) python3 scripts/run_comparison.py --teacher grounding_dino_t
+
+train-compare-stats: ## Aggregate per-teacher stats into data/comparison/stats.json
+	$(TRAIN) python3 scripts/compute_comparison_stats.py
+
+train-compare: ## Orchestrate: sample + run all + stats + LS upload (end-to-end)
+	$(MAKE) train-compare-sample
+	$(MAKE) train-compare-run-all
+	$(MAKE) train-compare-stats
+	$(MAKE) train-ls-compare-setup
+
+## —— P1.5 Label Studio annotation ————————————————
+
+train-ls-up: ## Start Label Studio at http://localhost:8080 (idempotent)
+	$(LS_COMPOSE) up -d
+	@echo "Waiting for Label Studio to come up..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		curl -sf http://localhost:8080/health > /dev/null && break || sleep 2; \
+	done
+	@echo "Enabling legacy API token auth + setting deterministic token..."
+	@docker exec vehicle_tracker-label-studio bash -c '\
+	  cd /label-studio && python label_studio/manage.py shell -c "\
+	from organizations.models import Organization; \
+	from rest_framework.authtoken.models import Token; \
+	from users.models import User; \
+	o = Organization.objects.first(); \
+	o.jwt.legacy_api_tokens_enabled = True; o.jwt.save(); \
+	u = User.objects.get(email=\"joel@vt.local\"); \
+	Token.objects.filter(user=u).delete(); \
+	Token.objects.create(user=u, key=\"vt_p1_5_token_2026\"); \
+	print(\"LS_INIT_OK\")"' 2>&1 | tail -3
+	@echo ""
+	@echo "Label Studio ready at http://localhost:8080"
+	@echo "  Login: joel@vt.local / vtlabels2026"
+	@echo "  Then run: make train-ls-compare-setup"
+
+train-ls-down: ## Stop Label Studio
+	$(LS_COMPOSE) down
+
+train-ls-compare-setup: ## Create LS comparison project + post all 5 teachers' predictions
+	$(TRAIN) python3 scripts/ls_setup.py --mode comparison
+
+train-ls-export: ## Export human-corrected labels from LS into data/benchmark/labels_gt
+	$(TRAIN) python3 scripts/ls_export.py
 
 ## —— Release —————————————————————————————————————
 

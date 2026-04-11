@@ -1,0 +1,36 @@
+services:
+  training:
+    image: vehicle_tracker-training:latest
+    build:
+      context: ./training
+      dockerfile: Dockerfile
+    runtime: nvidia
+    user: "${DS_UID}:${DS_GID}"
+    # PyTorch DataLoader workers communicate via /dev/shm. Docker's default
+    # shm size (64 MB) overflows fast when running YOLO training at batch 8
+    # with several workers — RuntimeError: unable to allocate shared memory.
+    # 8 GB is comfortable for anything we're likely to run.
+    shm_size: 8gb
+    extra_hosts:
+      # Allow ls_setup.py / ls_export.py to reach the Label Studio container
+      # (which is in a separate compose project and exposes 8080 to the host).
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./training:/app
+      - ./data_collection:/data:ro
+      - ./models:/models
+      - ./.training-cache:/home/training
+      # X11 socket for cv2.imshow in build_benchmark.py.
+      # Host must run `xhost +local:docker` once per session before using GUI scripts.
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    working_dir: /app
+    command: ["tail", "-f", "/dev/null"]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HOME=/home/training
+      - YOLO_CONFIG_DIR=/home/training/.config/Ultralytics
+      - DISPLAY=${DISPLAY:-:0}
+      - QT_X11_NO_MITSHM=1
+    stdin_open: true
+    tty: true

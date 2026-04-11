@@ -15,9 +15,11 @@ env/
 node_modules/
 frontend/dist/
 frontend/build/
+frontend/.vite/
 
 # Models
 *.engine
+*.engine.onnx_hash
 *.onnx
 *.pt
 *.pth
@@ -49,6 +51,8 @@ training/data/*
 !training/data/.gitkeep
 training/runs/*
 !training/runs/.gitkeep
+# Ultralytics pulls coco8 smoke-test into training/datasets/ on first run
+training/datasets/
 
 # Environment
 .env
@@ -57,4 +61,5 @@ CLAUDE.md
 .ds-cache
 .custom-cache
 .node-cache
+.training-cache
 .pytest_cache

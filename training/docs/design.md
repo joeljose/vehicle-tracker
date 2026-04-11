@@ -4,9 +4,9 @@
 
 This document describes the technical design for fine-tuning a YOLOv8s vehicle detector on site-specific traffic junction footage. The fine-tuned model improves upon the COCO-pretrained YOLOv8s currently used by both backends, especially for overhead camera angles and junction-specific vehicle appearances.
 
-**Input:** 5.2 hours of unlabeled video from 3 junctions (7 files, 2.5 GB)
+**Input:** 10 hours of unlabeled video from 3 junctions (21 files, ~8.4 GB, balanced 200 min/site)
 **Output:** TensorRT FP16 engine file, drop-in replacement for `models/yolov8s.onnx` (both backends)
-**Classes:** 4 — `car`, `truck` (includes trailers), `bus`, `motorcycle`
+**Classes:** 1 — `vehicle` (collapsed from the original 4 in M8-P1.5 v2; see `training/docs/prd.md` §6.2 for rationale). All COCO vehicle sub-types (car / motorcycle / bus / truck) map to this single class.
 
 ---
 
@@ -44,7 +44,7 @@ Start from `yolov8s.pt` (COCO pretrained, 80 classes, 44.9 mAP50-95). Fine-tune 
 
 ### Why Auto-Label
 
-Manual annotation of 5,000 frames × ~15 objects per frame = ~75,000 bounding boxes. At ~2 seconds per box, that's ~42 hours of manual work. Auto-labeling with a strong teacher model reduces this to reviewing only problematic frames (~5-8 hours).
+Manual annotation of ~8,000 frames × ~15 objects per frame ≈ 120,000 bounding boxes. At ~2 seconds per box, that's ~67 hours of manual work. Auto-labeling with a strong teacher model reduces this to reviewing only problematic frames (~8-12 hours).
 
 ### Teacher Model: YOLOv8x
 
@@ -66,16 +66,15 @@ YOLOv8x is 9 mAP points stronger than YOLOv8s on COCO. It serves as a "teacher" 
 site_videos/*.mp4
     │
     ▼ [extract_frames.py]
-    │  ffmpeg -vf "fps=1" → ~18,700 raw frames
+    │  ffmpeg -vf "fps=1" → ~36,000 raw frames
     │
     ▼ [dedup_frames.py]
     │  CNN perceptual hashing → remove near-duplicates
-    │  Target: 3,000–5,000 unique frames
+    │  Target: 5,000–10,000 unique frames
     │
     ▼ [auto_label.py]
-    │  YOLOv8x inference @ conf≥0.3
-    │  Filter to classes: car(2), truck(7), bus(5), motorcycle(3)
-    │  Remap COCO IDs → project IDs (0-3)
+    │  Teacher inference @ conf≥0.3 (configurable backend; see M8-P1.5 bake-off)
+    │  Filter to COCO vehicle classes, collapse all to single project class 0
     │  Output: YOLO format .txt per image
     │
     ▼ Confidence split
@@ -83,14 +82,14 @@ site_videos/*.mp4
        └── 0.3–0.5: flagged for human review
 ```
 
-### COCO-to-Project Class Mapping
+### COCO-to-Project Class Mapping (single-class collapse, M8-P1.5 v2)
 
 | COCO Class | COCO ID | Project Class | Project ID |
 |------------|---------|---------------|------------|
-| car | 2 | car | 0 |
-| truck | 7 | truck | 1 |
-| bus | 5 | bus | 2 |
-| motorcycle | 3 | motorcycle | 3 |
+| car | 2 | vehicle | 0 |
+| motorcycle | 3 | vehicle | 0 |
+| bus | 5 | vehicle | 0 |
+| truck | 7 | vehicle | 0 |
 
 All other COCO classes (76 remaining, including person and bicycle) are discarded. The truck class includes trailers and long vehicles — COCO's "truck" label covers these.
 
@@ -100,26 +99,41 @@ All other COCO classes (76 remaining, including person and bicycle) are discarde
 
 ### Extraction Rate: 1 FPS
 
-Traffic cameras are fixed-angle with slow scene changes. At 30 fps source rate, consecutive frames are nearly identical. 1 FPS captures all meaningful scene changes (vehicle arrivals/departures take 2-10 seconds to cross the junction).
+Traffic cameras are fixed-angle with slow scene changes. Source rate varies by site
+(741 & 73 and Drugmart & 73 are 60 fps; 741 & Lytle South is 30 fps), but consecutive
+source frames are nearly identical regardless. 1 FPS captures all meaningful scene
+changes (vehicle arrivals/departures take 2-10 seconds to cross the junction).
+
+`ffmpeg -vf fps=1` operates on wall-clock time, so the per-site frame yield is
+identical (12,000 frames per 200 min) regardless of source FPS. Lytle South
+frames may have marginally more motion blur (~33 ms exposure vs ~16 ms at 60 fps);
+this is left in deliberately as augmentation diversity rather than throttled out.
 
 ```
-5.2 hours × 3600 sec/hr × 1 frame/sec = 18,720 raw frames
+10 hours × 3600 sec/hr × 1 frame/sec = 36,000 raw frames
+(12,000 per junction — balanced inventory)
 ```
 
 ### Deduplication
 
-Fixed traffic cameras produce long stretches of near-identical frames (red lights, empty roads, stalled traffic). Perceptual deduplication using CNN feature hashing removes these.
+Fixed traffic cameras produce long stretches of near-identical frames (red lights, empty roads, stalled traffic). Perceptual deduplication removes these.
 
-**Method:** `imagededup` library with MobileNetV3 features. Cosine similarity threshold of 0.95 — frames above this are considered duplicates.
+**Method:** `imagededup` library with **PHash** (perceptual hash, DCT-based on pixel structure). 64-bit hash, Hamming distance threshold of 5.
 
-**Expected yield:** 3,000–5,000 unique frames (70-85% reduction). The exact number depends on traffic density and signal timing.
+**Why not CNN features:** MobileNetV3 (the imagededup CNN backend) encodes *semantic* content. For a fixed-camera traffic scene, every frame is semantically "traffic intersection at daytime", so cosine similarity at any sane threshold collapses the entire dataset into a single duplicate cluster (we tested this on 2026-04-10 and got 12,000 → 16 frames at threshold 0.95). PHash is structural — when cars enter, leave, or move across the junction, the pixel-DCT hash actually changes. This is the right tool for the job.
+
+**Tuning the threshold (Hamming distance, lower = stricter):**
+- 0–2: pixel-identical only, won't dedup anything meaningful
+- 5: starting value — drops frames where only sub-second sub-pixel jitter changed
+- 10: imagededup default — too lax, drops frames where a small car has moved across a few pixels
+
+**Expected yield:** 5,000–10,000 unique frames (~70–85% reduction across the 36,000 raw). Tune by re-reading the per-site manifest after a run.
 
 ### Site Balance
 
-The 741 & 73 junction has ~4.2 hours vs ~30 min each for the other two. To prevent the model from overfitting to one junction:
+The inventory is now balanced (200 min per junction). No subsampling needed.
 - Extract all frames from all videos at 1 FPS
-- During dataset splitting, stratify by site (each split contains proportional representation)
-- If the imbalance is extreme (>10:1), subsample the dominant site to a 5:1 ratio
+- During dataset splitting, stratify by site so each split contains roughly equal frames per junction
 
 ---
 

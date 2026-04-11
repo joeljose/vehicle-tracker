@@ -23,7 +23,7 @@ Both backends currently use YOLOv8s with COCO-pretrained weights, detecting 4 ve
 - Junction-specific vehicle appearances (stopped vehicles, partial occlusions) not well covered
 - Fine-tuning on site-specific data should improve recall significantly
 
-We have 5.2 hours of unlabeled video from our 3 target junctions. A fine-tuned model trained on this site-specific data should outperform the generic COCO-pretrained weights on our footage.
+We have 10 hours of unlabeled video from our 3 target junctions (balanced: 200 min per site). A fine-tuned model trained on this site-specific data should outperform the generic COCO-pretrained weights on our footage.
 
 ---
 
@@ -65,23 +65,24 @@ Uses the Vehicle Tracker system with the improved model. Does not interact with 
 
 ### 6.1 Available Video
 
+Inventory captured 2026-04-10. Each junction has 7 videos (1×20 min + 6×30 min) for a balanced 200 min / site.
+
 | Site | Files | Duration | Size |
 |------|-------|----------|------|
-| 741 & 73 | `Live Traffic @ 741 & 73.mp4` (3.7 hrs), `...23_30.mp4` (10 min), `...00_03...183336.mp4` (20 min) | ~4.2 hrs | ~1.7 GB |
-| 741 & Lytle South | `...23_17.mp4` (10 min), `...00_03...183334.mp4` (20 min) | ~30 min | ~0.5 GB |
-| Drugmart & 73 | `...23_19.mp4` (10 min), `...00_03...183337.mp4` (20 min) | ~30 min | ~0.4 GB |
-| **Total** | **7 files** | **~5.2 hrs** | **~2.5 GB** |
+| 741 & 73 | 7 (1×20 min + 6×30 min) | 200 min | ~2.6 GB |
+| 741 & Lytle South | 7 (1×20 min + 6×30 min) | 200 min | ~3.4 GB |
+| Drugmart & 73 | 7 (1×20 min + 6×30 min) | 200 min | ~2.4 GB |
+| **Total** | **21 files** | **600 min (10 hrs)** | **~8.4 GB** |
 
-All video is stored in `data_collection/site_videos/` (gitignored).
+All video is stored in `data_collection/site_videos/` (gitignored). Filename → site mapping is recorded in `training/configs/video_sites.yaml`.
 
 ### 6.2 Target Classes
 
-| ID | Class | COCO ID | Notes |
-|----|-------|---------|-------|
-| 0 | car | 2 | Sedans, SUVs, hatchbacks, pickups |
-| 1 | truck | 7 | Box trucks, semis, flatbeds, trailers, long vehicles |
-| 2 | bus | 5 | Transit buses, school buses |
-| 3 | motorcycle | 3 | Motorcycles, scooters |
+**M8-P1.5 v2 scope change (2026-04-11):** the detection taxonomy has been collapsed from 4 classes (car/truck/bus/motorcycle) to a single class. The Vehicle Tracker backend counts crossings, not vehicle types — no code path in `backend/pipeline/` branches on class, and no stakeholder has requested per-type analytics. The 4-class split cost us marginal bus (106) and motorcycle (168) instance counts well under the 1,500-instance fine-tuning comfort floor, plus significant annotation time on SUV-vs-truck taxonomic calls that the application doesn't use. If per-type analytics are ever needed later, they can be added as a lightweight second-stage classifier on cropped vehicle thumbnails without retraining the detector. See `/home/joel/.claude/plans/whimsical-doodling-aurora.md` for the full rationale.
+
+| ID | Class | Includes | Source COCO IDs (all collapse here) |
+|----|-------|----------|--------------------------------------|
+| 0 | vehicle | sedans, SUVs, hatchbacks, pickups, box trucks, semis, trailers, transit/school buses, motorcycles, scooters | 2 (car), 3 (motorcycle), 5 (bus), 7 (truck) |
 
 Dropped from consideration:
 - **person** — system tracks vehicles through junctions, not pedestrians
@@ -95,8 +96,8 @@ Dropped from consideration:
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| D-01 | Extract frames from all 7 site videos at 1 FPS | Must |
-| D-02 | Perceptual deduplication to remove near-identical frames (static camera, stopped traffic). Target: 3,000–5,000 unique frames from ~18,700 raw. | Must |
+| D-01 | Extract frames from all 21 site videos at 1 FPS | Must |
+| D-02 | Perceptual deduplication to remove near-identical frames (static camera, stopped traffic). Target: 5,000–10,000 unique frames from ~36,000 raw. | Must |
 | D-03 | Auto-label all deduplicated frames using YOLOv8x (COCO pretrained) as teacher model | Must |
 | D-04 | Filter auto-labels to target 4 vehicle classes only, remap COCO IDs to project class IDs | Must |
 | D-05 | Split auto-labels by confidence: ≥0.5 accepted directly, 0.3–0.5 flagged for human review | Must |
@@ -159,9 +160,9 @@ Dropped from consideration:
 
 | Metric | Target | Rationale |
 |--------|--------|-----------|
-| mAP50 on junction test set | ≥ pretrained YOLOv8s COCO baseline | Fine-tuning on site data should not degrade overall performance |
-| Car recall (including top-down views) | > pretrained YOLOv8s COCO | The key gap — overhead camera angles are underrepresented in COCO |
-| Truck/bus/motorcycle recall | ≥ 70% | These are the new classes that TrafficCamNet cannot detect at all |
+| Overall mAP50 on junction test set | ≥ pretrained YOLOv8s COCO baseline (vehicle-class equivalent) | Fine-tuning on site data should not degrade overall performance |
+| Vehicle recall (including top-down views) | > pretrained YOLOv8s COCO | The key gap — overhead camera angles are underrepresented in COCO |
+| Fragmentation index in the 741_73 gantry zone | Lower than YOLOv8x baseline | The known failure mode the teacher-bake-off is solving |
 | TensorRT FP16 inference | ≥ 100 fps on RTX 4050 | Must not bottleneck the real-time pipeline (runs at 30 fps) |
 
 ---
