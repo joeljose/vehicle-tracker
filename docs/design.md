@@ -1768,7 +1768,7 @@ git tag v0.2.0    →  version = "0.2.0"
 | M5 | 0.5.0 | Multi-channel shared pipeline |
 | M6 | 0.6.0 | YouTube Live streams |
 | M7 | 0.7.0 | Custom pipeline (NVDEC + TensorRT + BoT-SORT) |
-| M8 | 0.8.0 | Custom model training (YOLOv8s fine-tune, 4 vehicle classes) |
+| M8 | 0.8.0 | Custom model training (YOLOv8s fine-tune, single `vehicle` class, RF-DETR-M auto-labels) |
 | M9 | 0.9.0 | Polish (trajectory overlay, profiling, error handling) |
 
 ### Release Mechanism: Docker on GitHub Container Registry
@@ -1927,5 +1927,5 @@ Milestones are ordered for incremental, demonstrable progress. Each milestone pr
 | **M5** | Multi-channel | Shared pipeline: nvstreammux → nvinfer → nvtracker → nvstreamdemux → per-channel OSD/MJPEG. Dynamic source add/remove. BatchMetadataRouter. Per-source EOS. 336 tests. **COMPLETE (v0.5.0).** |
 | **M6** | YouTube Live streams | YouTube URL resolution via `yt-dlp`, HLS stream consumption, stream recovery with circuit breaker, serialized yt-dlp calls, last-frame buffer for Phase 3 frozen-frame replay. 371 tests. **COMPLETE (v0.6.0).** |
 | **M7** | Custom pipeline | NVDEC + TensorRT + BoT-SORT pipeline, same API contract as DeepStream |
-| **M8** | Custom model training | Auto-label junction video, fine-tune YOLOv8s (4 classes: car/truck/bus/motorcycle), TensorRT FP16 engine. See `training/docs/`. |
+| **M8** | Custom model training | Auto-label 10 hrs of balanced junction video with RF-DETR-M (bake-off winner over YOLOv8x/YOLO26x/YOLO12x/Grounding DINO), fine-tune YOLOv8s on a single `vehicle` class (P1.5 v2 scope change — 4 classes collapsed because the backend counts crossings not types), export ONNX for both backends. **Phase A–F complete (v0.8.0-dev).** See `training/docs/` and `plans/m8-custom-model-training.md`. |
 | **M9** | Polish | Remaining widgets (trajectory overlay, track count chart), performance profiling with Nsight Systems, edge case handling |

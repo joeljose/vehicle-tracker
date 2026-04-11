@@ -3,6 +3,51 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — M8-P1.5 v2
+
+### Added
+- Training container (`training/Dockerfile`) + Docker Compose service with
+  full auto-label → fine-tune → export workflow
+- Training scripts: frame extraction, PHash dedup, auto-labeling with
+  pluggable teachers, stratified split, YOLOv8s fine-tune (fresh + continue),
+  ONNX export, test-split evaluation, student-vs-teacher diff renderer
+- Teacher implementations: YOLOv8x, YOLO26x, YOLO12x, RF-DETR-M, Grounding DINO-T
+- 1000-frame teacher bake-off harness (`build_comparison_set.py`,
+  `run_comparison.py`, `compute_comparison_stats.py`) with qualitative
+  LS-based review instead of manual ground-truth mAP
+- Label Studio workflow (`ls_setup.py` / `ls_export.py`) with
+  `docker-compose.label-studio.yml` and legacy-token auto-init in the
+  `train-ls-up` Makefile target
+- Makefile `train-*` targets (`train-extract/dedup/label/split/student/
+  student-continue/export-onnx/compare*/ls-*`)
+- `plans/m8-custom-model-training.md` pointer plan
+- Canonical site ROI + entry/exit line configs under `backend/config/sites/`
+  for 741_73, drugmart, and lytle
+
+### Changed
+- Both backends now run a **single-class fine-tuned YOLOv8s** (project class
+  0 = `vehicle`) instead of the COCO-pretrained 80-class yolov8s
+- DeepStream YOLOv8 C++ parser rewritten for a (1,5,8400) tensor: no per-
+  anchor argmax, no COCO vehicle-id filter, always emits classId 0
+- Custom detector postprocess rewritten for the same 1-class tensor shape;
+  `COCO_VEHICLE_CLASSES` replaced with `PROJECT_CLASS_NAMES`
+- DeepStream `pgie_config.yml` rewritten: `num-detected-classes: 1`,
+  single-line `labels.txt` (`vehicle`), `class-attrs-all: pre-cluster-
+  threshold: 0.25` matching the parser's `CONF_THRESH`, deprecated
+  `parse-func: 0` removed
+- Custom engine builder defaults to `yolov8s_rfdetr_v1_cont.onnx` /
+  `..._custom.engine`
+- Top-level PRD/design M8 rows rewritten for the P1.5 v2 scope
+  (10 h balanced inventory, RF-DETR-M teacher, single class)
+
+### Fixed
+- DeepStream `model-engine-file` path now matches nvinfer's auto-generated
+  `<onnx>_b1_gpu0_fp16.engine` — previously the cache lookup missed on
+  every restart and TRT rebuilt the engine (~150 s) every time
+- Backend server `logging.basicConfig` wired up in `backend/main.py` so
+  `backend.pipeline.*` INFO-level lines (e.g. "New track #N") actually
+  surface under uvicorn; level is overridable via `VT_LOG_LEVEL`
+
 ## [0.7.0] - 2026-04-05
 
 ### Added
