@@ -2,6 +2,10 @@
 
 GPU-accelerated vehicle tracking for traffic junction monitoring. Detects vehicles, determines directional transit (entry arm to exit arm), and generates alerts with best-quality vehicle photos — all from a single consumer GPU.
 
+![Review phase demo](docs/demo_videos/review_demo.gif)
+
+*Review phase — alerts populate the feed on the right; clicking one replays the clip with bounding-box overlays and shows the best-photo snapshot.*
+
 ## Features
 
 - **Directional transit detection** — entry/exit directions (e.g., "west to north")
