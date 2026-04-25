@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from queue import Empty, Queue
 from typing import Callable
 
-import numpy as np
 
 from backend.pipeline.custom.decoder import NvDecoder
 from backend.pipeline.custom.detector import TRTDetector
@@ -43,6 +42,20 @@ logger = logging.getLogger(__name__)
 
 _MAX_PER_FRAME_DATA = 300  # ring buffer size per track
 
+# Uniform processing rate for all sources. Tracker / stitcher / idle-optimizer
+# all assume 30 FPS internally (see TrackerWrapper.frame_rate, track_buffer=150,
+# IdleOptimizer thresholds), so capping decode→infer→track to 30 FPS makes their
+# implicit time math actually true on 60 FPS sources, halves GPU/CPU work, and
+# leaves the source clip untouched for replay (ffmpeg slices the original file).
+PROCESS_FPS = 30.0
+PROCESS_INTERVAL_MS = 1000.0 / PROCESS_FPS
+
+# Drop-late-frame threshold: if the display thread is more than this far behind
+# real-time, drop the head-of-queue frame and re-anchor. Set generously so brief
+# stalls don't cause visible drops, but small enough that we recover within a
+# second or two from a long stall.
+DISPLAY_LATE_DROP_MS = 100.0
+
 
 @dataclass
 class _ChannelState:
@@ -68,11 +81,24 @@ class _ChannelState:
     inference_interval: int = 1  # 1 = every frame, 15 = idle
     # Current PTS from decoder (ms) — used for per_frame_data timestamps
     current_pts_ms: int = 0
+    # 30 FPS cap: PTS of last frame that passed the rate cap (-1 = none yet).
+    last_processed_pts_ms: int = -1
+    # Last computed tracks list (reused across idle-skipped frames so the
+    # display still updates at full source FPS while inference is sparse).
+    last_tracks: list = field(default_factory=list)
     # Display FIFO — processing pushes rendered frames, display pops at PTS rate
     display_queue: Queue = field(default_factory=lambda: Queue(maxsize=5))
     display_wall_start: float = 0.0  # wall-clock when display started
     display_pts_start: int = -1      # PTS of first displayed frame (ms)
-    # Last frame for Phase 3 replay
+    # Seek epoch: bumped by NvDecoder._restart on Setup-loop seek; the display
+    # thread compares against its own `display_seek_epoch` and re-anchors.
+    seek_epoch: int = 0
+    display_seek_epoch: int = 0
+    # Last clean BGR frame, kept for Phase-3 last-frame persistence. Encoded to
+    # JPEG only on phase transition, not every frame (B3).
+    last_frame_bgr: object | None = None
+    # Backwards-compat: tests still reference `last_frame_jpeg`. We populate it
+    # lazily inside `_persist_last_frame` and otherwise leave it None.
     last_frame_jpeg: bytes | None = None
 
 
@@ -121,6 +147,12 @@ class CustomPipeline:
         engine_path = ensure_engine()
         self._detector = TRTDetector(engine_path)
 
+        # Warm up the GPU paths so the first real frame doesn't pay
+        # one-time costs (TRT lazy module loads, RawKernel NVRTC compile,
+        # cupy memory pool init). Without this the first frame takes
+        # ~150 ms vs ~17 ms steady-state — visible as a startup hitch.
+        self._warmup()
+
         self._running = True
         self._thread = threading.Thread(
             target=self._pipeline_loop, name="custom-pipeline", daemon=True,
@@ -131,6 +163,38 @@ class CustomPipeline:
         )
         self._display_thread.start()
         logger.info("CustomPipeline started")
+
+    def _warmup(self) -> None:
+        """Pay one-time GPU-init costs at startup (B7).
+
+        Runs one dummy preprocess + inference + NV12 colour conversion to
+        force CuPy RawKernel JIT, TensorRT lazy-init, and CUDA module loads.
+        """
+        try:
+            import cupy as cp
+
+            t0 = time.monotonic()
+            dummy_h, dummy_w = 1080, 1920
+            dummy_nv12 = cp.zeros(
+                (dummy_h * 3 // 2, dummy_w), dtype=cp.uint8,
+            )
+            # Trigger NVRTC compile of both colour-conversion kernels.
+            nv12_to_rgb_gpu(dummy_nv12, dummy_h, dummy_w)
+            nv12_to_bgr_gpu(dummy_nv12, dummy_h, dummy_w)
+            # Trigger preprocess + TRT context first-call cost.
+            input_tensor, scale_info = self._preprocess(
+                dummy_nv12, dummy_h, dummy_w,
+            )
+            self._detector.detect(input_tensor, scale_info)
+            cp.cuda.Device(0).synchronize()
+            logger.info(
+                "CustomPipeline warmup completed in %.0f ms",
+                (time.monotonic() - t0) * 1000,
+            )
+        except Exception as exc:
+            # Warmup failures are non-fatal — just means the first real
+            # frame will pay the startup cost as before.
+            logger.warning("Warmup failed (non-fatal): %s", exc)
 
     def stop(self) -> None:
         """Stop pipeline, release all resources."""
@@ -255,17 +319,35 @@ class CustomPipeline:
     # -- Pipeline loop (runs on background thread) --
 
     def _pipeline_loop(self):
-        """Main pipeline loop — decode, infer, track, analytics."""
+        """Main pipeline loop — decode, (rate-cap), infer, track, analytics, render.
+
+        Per iteration: read one frame from each non-Review channel, gate it
+        through the 30 FPS rate cap, then process. The pipeline thread blocks
+        on `display_queue.put` (B17 backpressure) so the decoder is naturally
+        rate-limited to display rate when the source is faster than 30 FPS or
+        when display is gated by the PTS-pacer.
+        """
+        import cupy as cp
+
         while self._running:
             self._drain_transitions()
 
-            # Find channels ready for processing
+            # Find channels with a frame ready to process this iteration
             active = {}
             for ch_id, state in list(self._states.items()):
                 if state.decoder is None:
                     continue
                 if state.phase == ChannelPhase.REVIEW:
                     continue
+
+                # Re-sync rate-cap baseline if the decoder has seeked. We pick
+                # this up here (in addition to the explicit reset on phase
+                # transition) so that Setup-loop seeks don't double-skip the
+                # first post-loop frame.
+                dec_epoch = state.decoder.seek_epoch
+                if dec_epoch != state.seek_epoch:
+                    state.seek_epoch = dec_epoch
+                    state.last_processed_pts_ms = -1
 
                 nv12, pts = state.decoder.read()
                 if nv12 is None:
@@ -275,70 +357,97 @@ class CustomPipeline:
                 state.current_pts_ms = pts
                 state.frame_count += 1
 
-                # Idle optimization: skip inference if idle
+                # 30 FPS rate cap (post-decode). NVDEC still decodes every
+                # frame because H.264 is inter-coded, but we drop alternate
+                # frames before the expensive preprocess/infer/render path.
+                last_pts = state.last_processed_pts_ms
+                if last_pts >= 0 and (pts - last_pts) < PROCESS_INTERVAL_MS - 1:
+                    continue
+                state.last_processed_pts_ms = pts
+
+                # Idle inference skipping: every Nth processed frame runs the
+                # detector; in between, we reuse `state.last_tracks` so the
+                # display still gets a frame at the (capped) source rate.
+                run_inference = True
                 if state.inference_interval > 1:
                     if state.infer_count % state.inference_interval != 0:
-                        state.infer_count += 1
-                        continue
+                        run_inference = False
 
-                active[ch_id] = (nv12, pts, state)
+                active[ch_id] = (nv12, pts, state, run_inference)
 
             if not active:
                 time.sleep(0.001)
                 continue
 
-            # Process each channel
-            for ch_id, (nv12, pts, state) in active.items():
+            # Process each channel that passed the rate cap.
+            for ch_id, (nv12, pts, state, run_inference) in active.items():
                 t0 = time.monotonic()
 
-                # GPU preprocess
-                input_tensor, scale_info = self._preprocess(
-                    nv12, state.decoder.height, state.decoder.width,
-                )
+                if run_inference:
+                    # GPU preprocess
+                    input_tensor, scale_info = self._preprocess(
+                        nv12, state.decoder.height, state.decoder.width,
+                    )
 
-                # TRT inference + NMS
-                detections = self._detector.detect(input_tensor, scale_info)
+                    # TRT inference + NMS
+                    detections = self._detector.detect(input_tensor, scale_info)
 
-                # BoT-SORT tracking (pass BGR frame for ReID feature extraction)
-                bgr_frame = None
-                if len(detections) > 0 and state.tracker._with_reid:
-                    import cupy as cp
-                    bgr_gpu = nv12_to_bgr_gpu(nv12, state.decoder.height, state.decoder.width)
-                    bgr_frame = cp.asnumpy(bgr_gpu)
-                tracks = state.tracker.update(detections, frame=bgr_frame)
+                    # Single NV12→BGR conversion shared between ReID extractor
+                    # and renderer (was two separate conversions; B6).
+                    bgr_frame = None
+                    if state.tracker._with_reid and len(detections) > 0:
+                        bgr_gpu = nv12_to_bgr_gpu(
+                            nv12, state.decoder.height, state.decoder.width,
+                        )
+                        bgr_frame = cp.asnumpy(bgr_gpu)
+
+                    tracks = state.tracker.update(detections, frame=bgr_frame)
+                    state.last_tracks = tracks
+
+                    # Phase routing: always track, conditionally analyze.
+                    if state.phase == ChannelPhase.ANALYTICS:
+                        self._process_analytics(ch_id, state, tracks)
+
+                    # Idle optimization update — only when we actually inferred.
+                    if state.idle_optimizer:
+                        transition = state.idle_optimizer.update(
+                            num_detections=len(detections),
+                            num_active_tracks=len(state.active_tracks),
+                        )
+                        if transition:
+                            state.inference_interval = (
+                                state.idle_optimizer.recommended_interval
+                                if transition == "idle" else 1
+                            )
+                            mode = "IDLE" if transition == "idle" else "ACTIVE"
+                            logger.info(
+                                "Channel %d: %s mode (interval=%d)",
+                                ch_id, mode, state.inference_interval,
+                            )
+                else:
+                    # Idle skip: reuse last computed tracks; bgr_frame stays
+                    # None (renderer derives BGR from NV12 itself).
+                    tracks = state.last_tracks
+                    bgr_frame = None
 
                 infer_ms = (time.monotonic() - t0) * 1000
                 state.infer_count += 1
 
-                # Phase routing: always track, conditionally analyze
-                if state.phase == ChannelPhase.ANALYTICS:
-                    self._process_analytics(ch_id, state, tracks)
-
-                # Idle optimization update
-                if state.idle_optimizer:
-                    transition = state.idle_optimizer.update(
-                        num_detections=len(detections),
-                        num_active_tracks=len(state.active_tracks),
-                    )
-                    if transition:
-                        state.inference_interval = (
-                            state.idle_optimizer.recommended_interval
-                            if transition == "idle" else 1
-                        )
-                        mode = "IDLE" if transition == "idle" else "ACTIVE"
-                        logger.info(
-                            "Channel %d: %s mode (interval=%d)",
-                            ch_id, mode, state.inference_interval,
-                        )
-
-                # Store latest rendered frame — display thread emits at source FPS
+                # Render + display. Blocking put provides backpressure (B17):
+                # if the display queue is full, the pipeline thread waits
+                # rather than draining the decoder ahead of display.
                 if self._frame_callback:
-                    self._store_display_frame(ch_id, state, nv12, tracks, infer_ms, pts)
+                    self._store_display_frame(
+                        ch_id, state, nv12, bgr_frame, tracks, infer_ms, pts,
+                    )
 
-                # Best-photo crop extraction (RGB — matches BestPhotoTracker convention)
-                if state.best_photo and state.best_photo.pending_crops:
-                    import cupy as cp
-
+                # Best-photo crop extraction (uses RGB; only when there's
+                # actually pending work and we ran inference this frame).
+                if (
+                    run_inference
+                    and state.best_photo
+                    and state.best_photo.pending_crops
+                ):
                     rgb_gpu = nv12_to_rgb_gpu(
                         nv12, state.decoder.height, state.decoder.width,
                     )
@@ -415,6 +524,10 @@ class CustomPipeline:
             state.frame_count = 0
             state.infer_count = 0
             state.inference_interval = 1
+            state.last_processed_pts_ms = -1  # reset 30 FPS rate-cap baseline
+            state.last_tracks = []
+            state.seek_epoch = 0
+            state.display_seek_epoch = 0
             state.display_pts_start = -1  # reset display timeline
 
             # Best-photo tracker
@@ -451,15 +564,27 @@ class CustomPipeline:
             )
 
     def _handle_eos(self, channel_id: int):
-        """Handle end-of-stream for a channel."""
+        """Handle end-of-stream for a channel.
+
+        For YouTube Live in Analytics: trigger async recovery on the first EOS
+        and then *swallow* subsequent EOS calls while recovery is in flight.
+        Without this short-circuit, the pipeline thread loops back into
+        `decoder.read()` (still returning None for an EOS HLS decoder), calls
+        `_handle_eos` again, and the fall-through transitions the channel to
+        Review while recovery is mid-retry — leaving us decoderless when the
+        new HLS URL eventually arrives. (B1.)
+        """
         state = self._states.get(channel_id)
         if state is None:
+            return
+
+        # Recovery already in flight for this channel — don't act on this EOS.
+        if channel_id in self._recovering:
             return
 
         if (
             state.source_type == "youtube_live"
             and state.phase == ChannelPhase.ANALYTICS
-            and channel_id not in self._recovering
         ):
             # YouTube: try recovery before giving up
             self._trigger_recovery(channel_id, "decode returned None (HLS)")
@@ -813,26 +938,30 @@ class CustomPipeline:
         channel_id: int,
         state: _ChannelState,
         nv12,
+        bgr_frame,
         tracks: list[dict],
         infer_ms: float,
         pts: int,
     ):
-        """Render frame and push to display FIFO for real-time playback.
+        """Render annotated frame and push to display FIFO with backpressure.
 
-        If queue is full (processing ahead of display), skip rendering
-        to avoid wasting CPU on frames the display won't show.
+        Reuses the BGR ndarray produced for ReID when available (single
+        NV12→BGR conversion per frame, B6). Caches the clean BGR for Phase-3
+        replay so we don't encode a clean JPEG every frame (B3). Uses a
+        blocking put so the pipeline thread is naturally rate-limited to the
+        display rate when source > 30 FPS or display gates by PTS (B17).
         """
-        if state.display_queue.full():
-            return  # processing ahead — skip render
+        if bgr_frame is None:
+            bgr_frame = self._renderer.decode_nv12(
+                nv12, state.decoder.height, state.decoder.width,
+            )
 
-        bgr_frame = self._renderer.decode_nv12(
-            nv12, state.decoder.height, state.decoder.width,
-        )
+        # Cache the latest clean BGR frame for Phase-3 last-frame persistence.
+        # Encoding a JPEG happens lazily inside _persist_last_frame on phase
+        # transition — not on every frame.
+        state.last_frame_bgr = bgr_frame
 
-        # Save clean frame (no overlays) for Phase 3 frozen-frame replay
-        state.last_frame_jpeg = self._renderer.encode_clean(bgr_frame)
-
-        # Render annotated JPEG (bboxes only — ROI/lines are frontend overlays)
+        # Render annotated JPEG (bboxes only — ROI/lines are frontend overlays).
         annotated_jpeg = self._renderer.annotate_and_encode(bgr_frame, tracks)
 
         det_list = [
@@ -856,23 +985,47 @@ class CustomPipeline:
             phase=state.phase.value,
             idle_mode=state.idle_optimizer.is_idle if state.idle_optimizer else False,
         )
+        # Bounded blocking put: backpressure for the pipeline thread. The
+        # short timeout ensures we drop on permanent display stalls (e.g.
+        # display thread wedged) rather than blocking forever.
         try:
-            state.display_queue.put_nowait(result)
+            state.display_queue.put(result, block=True, timeout=1.0)
         except Exception:
-            pass  # queue full — skip
+            pass
 
     def _display_loop(self):
         """Emit frames to MJPEG clients at real-time PTS rate.
 
         Pops rendered frames from each channel's display FIFO and emits
-        them when wall-clock time matches the frame's PTS. Processing
-        runs at full speed; this thread ensures real-time playback.
+        them when wall-clock time matches the frame's PTS. Two correctness
+        properties beyond simple PTS gating:
+
+        - **Seek-epoch resync (B4)**: when the decoder seeks (Setup loop),
+          the pipeline-side `state.seek_epoch` increments. We compare to our
+          own `state.display_seek_epoch`, drain the now-stale queue, and
+          reset the wall/PTS baseline so the post-loop pass paces correctly.
+
+        - **Drop-late-frame (B2)**: if wall-clock has fallen more than
+          `DISPLAY_LATE_DROP_MS` behind the queued frame's PTS, drop the
+          head and re-anchor. Without this, a transient stall (cold start,
+          GC, etc.) would leave the pacer permanently behind real-time.
         """
         while self._running:
             emitted = False
             now = time.monotonic()
 
             for ch_id, state in list(self._states.items()):
+                # On seek (decoder loop), drain stale frames and reset baseline.
+                if state.display_seek_epoch != state.seek_epoch:
+                    while True:
+                        try:
+                            state.display_queue.get_nowait()
+                        except Empty:
+                            break
+                    state.display_pts_start = -1
+                    state.display_seek_epoch = state.seek_epoch
+                    continue  # re-evaluate next iteration
+
                 if state.display_queue.empty():
                     continue
 
@@ -882,20 +1035,31 @@ class CustomPipeline:
                 except (IndexError, AttributeError):
                     continue
 
-                # Initialize PTS baseline on first frame
+                # Initialize PTS baseline on first frame after start/seek.
                 if state.display_pts_start < 0:
                     state.display_pts_start = result.timestamp_ms
                     state.display_wall_start = now
 
-                # Check if it's time to show this frame
                 video_elapsed_ms = result.timestamp_ms - state.display_pts_start
                 wall_elapsed_ms = (now - state.display_wall_start) * 1000
+
+                # Drop-late-frame: if we're significantly behind real-time,
+                # skip this frame and re-anchor on the next one. This keeps
+                # cumulative drift bounded regardless of pipeline jitter.
+                if wall_elapsed_ms - video_elapsed_ms > DISPLAY_LATE_DROP_MS:
+                    try:
+                        state.display_queue.get_nowait()
+                    except Empty:
+                        continue
+                    state.display_pts_start = -1  # re-anchor on next frame
+                    emitted = True
+                    continue
 
                 if wall_elapsed_ms >= video_elapsed_ms:
                     # Time to emit — pop from queue
                     try:
                         result = state.display_queue.get_nowait()
-                    except Exception:
+                    except Empty:
                         continue
                     self._safe_callback(self._frame_callback, result)
                     emitted = True
@@ -931,19 +1095,36 @@ class CustomPipeline:
         cleanup_channel_snapshots(channel_id)
 
     def _persist_last_frame(self, channel_id: int) -> None:
-        """Save the last rendered frame to disk for Phase 3 frozen-frame replay."""
+        """Save the last rendered frame to disk for Phase 3 frozen-frame replay.
+
+        Encodes JPEG from the cached BGR ndarray. This is the single
+        encode_clean call per channel lifetime — it used to fire on every
+        frame just so the most recent one would be on disk (B3).
+        """
         from pathlib import Path
 
         state = self._states.get(channel_id)
-        if state is None or not isinstance(state.last_frame_jpeg, bytes):
+        if state is None:
+            return
+
+        # Prefer the cached BGR (current path); fall back to a pre-existing
+        # JPEG if a test or reconnect-flow stored one directly.
+        jpeg: bytes | None = None
+        if state.last_frame_bgr is not None:
+            jpeg = self._renderer.encode_clean(state.last_frame_bgr)
+            state.last_frame_jpeg = jpeg
+        elif isinstance(state.last_frame_jpeg, bytes):
+            jpeg = state.last_frame_jpeg
+
+        if jpeg is None:
             return
 
         frame_dir = Path("snapshots") / str(channel_id)
         frame_dir.mkdir(parents=True, exist_ok=True)
         frame_path = frame_dir / "last_frame.jpg"
-        frame_path.write_bytes(state.last_frame_jpeg)
+        frame_path.write_bytes(jpeg)
         logger.info(
-            "Channel %d: persisted last frame (%d bytes)", channel_id, len(state.last_frame_jpeg),
+            "Channel %d: persisted last frame (%d bytes)", channel_id, len(jpeg),
         )
 
     def _safe_callback(self, callback, *args):

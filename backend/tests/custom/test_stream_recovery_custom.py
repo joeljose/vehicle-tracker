@@ -1,7 +1,5 @@
 """Stream recovery tests for the custom pipeline."""
 
-import threading
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest

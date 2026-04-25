@@ -11,15 +11,12 @@ Extracts common logic to avoid duplication across backends:
 
 import asyncio
 import logging
-import os
 import shutil
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from backend.pipeline.direction import (
-    DirectionStateMachine,
     LineSeg,
     check_line_crossing,
     classify_crossing,

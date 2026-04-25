@@ -63,3 +63,4 @@ CLAUDE.md
 .node-cache
 .training-cache
 .pytest_cache
+.playwright-mcp/

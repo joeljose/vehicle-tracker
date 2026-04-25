@@ -39,14 +39,20 @@ class CleanFrameExtractor(BufferOperator):
     """Pre-OSD probe that captures clean frames (no bounding box overlays).
 
     Used for best-photo crops and last-frame capture. Runs every frame
-    (not rate-limited) because best-photo needs to check every frame for
-    pending crops.
+    because best-photo needs to check every frame for pending crops; but
+    only **caches** the most recent clean BGR ndarray. JPEG encoding for
+    Phase-3 last-frame replay is deferred to phase transition (see
+    `DeepStreamPipeline._persist_last_frame`), saving ~5-10 ms of CPU per
+    frame that was previously spent encoding a JPEG nobody reads until
+    Review (B14, mirrors custom-backend B3).
     """
 
     def __init__(self, reporter: TrackingReporter):
         super().__init__()
         self._reporter = reporter
-        self.last_frame: bytes | None = None  # most recent clean JPEG
+        # Most recent clean BGR ndarray (numpy). Encoded to JPEG lazily on
+        # phase transition. None until we've seen at least one frame.
+        self.last_frame_bgr = None
 
     def handle_buffer(self, buffer):
         try:
@@ -63,17 +69,23 @@ class CleanFrameExtractor(BufferOperator):
                 if best_photo and best_photo.pending_crops:
                     best_photo.extract_crops(frame)
 
-                # Keep most recent clean frame as JPEG for Phase 3 replay
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                _, jpeg_buf = cv2.imencode(
-                    ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80]
-                )
-                self.last_frame = jpeg_buf.tobytes()
+                # Cache most recent BGR for Phase-3 replay; encode lazily.
+                self.last_frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
             return True
         except Exception as e:
             logger.error("CleanFrameExtractor: %s", e)
             return True
+
+    def encode_last_frame_jpeg(self) -> bytes | None:
+        """Encode the cached clean BGR to JPEG. Called once on phase change."""
+        if self.last_frame_bgr is None:
+            return None
+        import cv2
+        ok, jpeg_buf = cv2.imencode(
+            ".jpg", self.last_frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80]
+        )
+        return jpeg_buf.tobytes() if ok else None
 
 
 class MjpegExtractor(BufferOperator):
@@ -743,16 +755,26 @@ class DeepStreamPipeline:
             self._safe_callback(self._on_pipeline_error, msg_str)
 
     def _on_pipeline_error(self, error_msg: str) -> None:
-        """Handle GStreamer errors — trigger recovery for YouTube sources."""
-        # Find YouTube channels in ANALYTICS that might need recovery
-        for channel_id, state in self._states.items():
+        """Handle GStreamer errors — trigger recovery for *all* matching
+        YouTube/Analytics channels (B9).
+
+        A pipeline-level error (e.g. GPU OOM, decoder failure) generally
+        affects every source on the shared pipeline, so recovering only the
+        first one would leave the rest stuck in Analytics with a dead
+        pipeline. We snapshot the channel list first because
+        `_trigger_recovery` mutates `self._recovering` and may schedule
+        callbacks that mutate `self._states`.
+        """
+        candidates = [
+            cid for cid, state in self._states.items()
             if (
                 state.source_type == "youtube_live"
                 and state.phase == ChannelPhase.ANALYTICS
-                and channel_id not in self._recovering
-            ):
-                self._trigger_recovery(channel_id, error_msg)
-                break  # Handle one channel at a time
+                and cid not in self._recovering
+            )
+        ]
+        for channel_id in candidates:
+            self._trigger_recovery(channel_id, error_msg)
 
     def _trigger_recovery(self, channel_id: int, reason: str) -> None:
         """Start async recovery for a YouTube Live channel."""
@@ -915,13 +937,15 @@ class DeepStreamPipeline:
         self._ws_broadcaster = broadcaster
 
     def _persist_last_frame(self, channel_id: int) -> None:
-        """Save the last clean frame to disk for Phase 3 replay."""
+        """Save the last clean frame to disk for Phase 3 replay.
+
+        Encodes JPEG from the BGR ndarray cached by `CleanFrameExtractor`
+        (was encoded eagerly every frame; B14).
+        """
         state = self._states.get(channel_id)
-        if state is None:
+        if state is None or state.clean_extractor is None:
             return
-        jpeg = None
-        if state.clean_extractor and state.clean_extractor.last_frame:
-            jpeg = state.clean_extractor.last_frame
+        jpeg = state.clean_extractor.encode_last_frame_jpeg()
         if not isinstance(jpeg, bytes):
             return
 
