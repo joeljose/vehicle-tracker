@@ -94,19 +94,24 @@ class TestReconnectTransition:
 
 
 class TestLastFramePersists:
-    """last_frame_jpeg should not be cleared during recovery."""
+    """The cached last frame must survive a recovery-driven decoder reconnect.
+
+    Phase-3 review depends on this: if recovery silently dropped the cached
+    frame, the user would see a black screen after a stream reconnect.
+    """
 
     def test_reconnect_preserves_last_frame(self, pipeline):
-        """Reconnect reuses existing state — last_frame_jpeg is untouched."""
+        """Reconnect reuses existing state — last_frame_bgr is untouched."""
         mock_decoder = MagicMock()
+        sentinel = object()  # stand-in for a numpy BGR ndarray
         state = MagicMock(
             decoder=mock_decoder,
             source="old_url",
-            last_frame_jpeg=b"jpeg_data_here",
+            last_frame_bgr=sentinel,
         )
         pipeline._states[0] = state
 
         pipeline._do_reconnect_channel(0, "new_hls_url")
 
-        # last_frame_jpeg should still be the original value
-        assert state.last_frame_jpeg == b"jpeg_data_here"
+        # The cached BGR frame must not have been touched.
+        assert state.last_frame_bgr is sentinel

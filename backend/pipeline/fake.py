@@ -17,7 +17,6 @@ class FakeBackend:
         self.channels: dict[int, str] = {}  # channel_id -> source
         self.channel_phases: dict[int, ChannelPhase] = {}
         self.confidence_threshold: float = 0.5
-        self.inference_interval: int = 0
         self._frame_callback: Callable[[FrameResult], None] | None = None
         self._alert_callback: Callable[[dict], None] | None = None
         self._track_ended_callback: Callable[[dict], None] | None = None
@@ -79,9 +78,6 @@ class FakeBackend:
 
     def set_confidence_threshold(self, threshold: float) -> None:
         self.confidence_threshold = threshold
-
-    def set_inference_interval(self, interval: int) -> None:
-        self.inference_interval = interval
 
     def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         self._frame_callback = callback

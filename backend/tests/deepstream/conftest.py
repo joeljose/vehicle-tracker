@@ -1,10 +1,10 @@
-"""Auto-skip DeepStream tests when running in the custom container."""
+"""Auto-skip DeepStream tests unless running inside the deepstream container."""
 
 import os
 
 import pytest
 
-if os.environ.get("VT_BACKEND") not in ("deepstream", None):
+if os.environ.get("VT_BACKEND") != "deepstream":
     pytest.skip(
         "DeepStream tests require VT_BACKEND=deepstream",
         allow_module_level=True,

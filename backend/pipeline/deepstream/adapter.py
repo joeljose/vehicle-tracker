@@ -194,7 +194,6 @@ class DeepStreamPipeline:
         self._phase_callback: Callable[[int, object, object], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._confidence_threshold: float = 0.5
-        self._inference_interval: int = 0
         self._labels: dict[int, str] | None = None
         self._started = False
         # Shared pipeline state (M5)
@@ -317,9 +316,6 @@ class DeepStreamPipeline:
 
     def set_confidence_threshold(self, threshold: float) -> None:
         self._confidence_threshold = threshold
-
-    def set_inference_interval(self, interval: int) -> None:
-        self._inference_interval = interval
 
     # -- Callbacks --
 
@@ -642,7 +638,7 @@ class DeepStreamPipeline:
 
         if state.reporter:
             for tid, sstate in list(state.reporter.stitcher.lost_tracks.items()):
-                state.reporter._finalize_lost_track(tid, sstate)
+                state.reporter.finalize_lost_track(tid, sstate)
             state.reporter.stitcher.lost_tracks.clear()
 
             if state.best_photo:

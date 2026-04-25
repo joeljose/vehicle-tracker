@@ -25,20 +25,19 @@ def cleanup_output():
 
 
 def test_config_loads_labels():
-    """Labels file loads correctly."""
+    """Labels file loads — single-class fine-tuned student (M8-P1.5 v2)."""
     from backend.pipeline.deepstream.config import load_labels
 
     labels = load_labels()
-    assert labels[0] == "person"
-    assert labels[2] == "car"
-    assert labels[3] == "motorcycle"
-    assert labels[5] == "bus"
-    assert labels[7] == "truck"
-    assert len(labels) == 80
+    assert labels == {0: "vehicle"}
 
 
 def test_pipeline_detects_vehicles():
-    """Pipeline detects vehicles on junction footage."""
+    """Pipeline detects vehicles on junction footage.
+
+    Under the M8-P1.5 v2 fine-tuned single-class student, every detection has
+    class id 0 / label "vehicle".
+    """
     from backend.pipeline.deepstream.pipeline import run_pipeline
 
     summary = run_pipeline(str(CLIP_741_73))
@@ -46,7 +45,7 @@ def test_pipeline_detects_vehicles():
     assert summary["frames"] > 0, "No frames processed"
     assert summary["total_detections"] > 0, "No detections"
     assert summary["fps"] > 0, "FPS should be positive"
-    assert "car" in summary["class_counts"], "Should detect cars"
+    assert "vehicle" in summary["class_counts"], "Should detect vehicles"
 
 
 def test_pipeline_annotated_output(cleanup_output):
