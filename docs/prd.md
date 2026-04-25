@@ -1,8 +1,8 @@
 # Product Requirements Document
 ## Vehicle Tracker System — Traffic Junction Monitor
 
-**Version:** 0.7
-**Status:** M7 Complete (v0.7.0)
+**Version:** 0.8-dev
+**Status:** M8 Phase A–F shipped (single-class fine-tuned student); post-M8 hardening pass complete (playback pacing, WS HoL, clip-extractor race, HLS init bound, DS soft-remove).
 **Last updated:** April 2026
 
 ---

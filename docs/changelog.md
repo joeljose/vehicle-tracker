@@ -3,6 +3,94 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Post-M8 hardening
+
+### Added
+- WS broadcaster: per-client `asyncio.Queue` + per-client send task. A slow
+  consumer (frozen tab, dev-tools throttling, slow network) only loses its
+  own backlog; everyone else continues at full rate. `TestWsHeadOfLineIsolation`
+  pins the three meaningful failure modes (B8, #116).
+- Custom backend warmup at `start()`: dummy TRT inference + RawKernel calls,
+  so the first real frame doesn't pay one-time NVRTC compile / TRT lazy-init
+  costs (~150 ms hitch eliminated, B7).
+- Custom backend NvDecoder seek-epoch counter; display thread re-anchors PTS
+  baseline + drains stale queue on Setup-loop seek so post-loop frames pace
+  correctly (B4).
+- Drop-late-frame branch in `_display_loop`: when wall-clock has fallen more
+  than 100 ms behind a queued frame's PTS, drop and re-anchor instead of
+  accumulating drift forever (B2).
+- Pipeline-thread backpressure on `display_queue`: blocking put with bounded
+  timeout. Decoder is naturally rate-limited to display rate so the EOS
+  auto-Review transition no longer fires while display has only emitted a
+  fraction of frames (B17).
+- Uniform 30 FPS processing cap on the custom pipeline. Tracker is
+  hardcoded for 30 FPS (`frame_rate=30`, `track_buffer=150` "5 s at 30fps");
+  capping makes the implicit time math actually true on 60 FPS sources,
+  halves GPU/CPU work, and leaves source clips untouched for replay.
+- `experiments/exp_perf_audit.py` and `experiments/exp_e2e_fps.py` —
+  per-stage micro-benchmarks and end-to-end achieved-FPS measurements that
+  produced the numbers behind the playback fixes.
+- Bounded HLS init wait in `NvDecoder._init_hls`: race the demuxer-open
+  against gst-launch exit on a worker thread. If gst exits before
+  connecting, raise `RuntimeError` with the captured stderr tail; if
+  neither side progresses within 15 s, raise `TimeoutError` (B15, #120).
+- DeepStream `MjpegExtractor` now populates `Detection.bbox` from the
+  latest entry in each track's `per_frame_data` so the WS frame_data
+  protocol matches the custom backend (B13).
+- DS `_on_pipeline_error` now triggers recovery for **every** matching
+  YouTube/Analytics channel rather than `break`-ing after the first; a
+  global GStreamer error no longer leaves N-1 channels stuck (B9).
+
+### Changed
+- DeepStream `Analytics→Review`, `_on_source_eos`, `remove_channel` and
+  `_eject_channel` now use `_soft_remove_source` instead of rebuilding the
+  entire shared pipeline. Other active channels keep producing frames at
+  source rate during the transition (B12 partial; #121).
+- Custom backend renderer caches the latest BGR frame as
+  `state.last_frame_bgr` and encodes a clean JPEG only on phase
+  transition. The redundant per-frame `encode_clean()` was the dominant
+  CPU cost in the render path (~6.7 ms/frame; B3).
+- Custom backend computes the NV12→BGR conversion once per frame and
+  shares the ndarray between the ReID encoder and the renderer (was two
+  independent conversions; B6).
+- Custom backend idle skip no longer freezes the display feed: only
+  inference is skipped, the renderer reuses the last computed tracks list
+  so the live MJPEG continues at source FPS (B5).
+- Custom backend `_handle_eos` short-circuits when the channel is in
+  recovery: a follow-up EOS no longer transitions the channel to Review
+  while reconnect is in flight, leaving the recovery thread to silently
+  no-op when it tries to reconnect (B1).
+- `ClipExtractor` cleanup now drains in-flight ffmpeg jobs before
+  `shutil.rmtree`-ing the output directory. Each ffmpeg invocation also
+  defensive-mkdirs and captures stderr (so future failures appear with
+  actual cause rather than the misleading "No such file or directory"
+  surface from the previous race).
+- Promoted `TrackingReporter._finalize_lost_track` to a public
+  `finalize_lost_track`. The DS adapter and standalone `run_pipeline`
+  both called it from outside the class; matching reality avoids a
+  private-attr smell (B10).
+
+### Removed
+- `set_inference_interval` from the `PipelineBackend` Protocol and all
+  three implementations (always a no-op or pure storage; idle
+  optimization writes the nvinfer interval directly). The matching
+  `UpdateConfigRequest.inference_interval` field, the `PATCH /config`
+  branch, and the dead test cases are gone too (B11).
+- `last_frame_jpeg` shim from custom `_ChannelState` and the lazy-jpeg
+  fallback in `_persist_last_frame`. The cached BGR is now the single
+  source of truth.
+- `ONNX_MODEL` constant from `deepstream/config.py` and the orphaned
+  `scripts/export_yolov8s_nms.py`. Both pointed at the pre-M8-P1.5 v2
+  model; the current export path goes through `make train-export-onnx`.
+
+### Fixed
+- Two stale tests in `tests/deepstream/test_pipeline_detect.py` that
+  expected the old 80-class COCO labels (\`labels[0] == "person"\`,
+  \`"car" in class_counts\`) and had been failing on every DS test run
+  since M8-P1.5 v2. Updated to expect \`{0: "vehicle"}\`.
+- Pre-existing unused-import lint errors in `pipeline/shared.py` and
+  `tests/custom/test_stream_recovery_custom.py` cleaned up.
+
 ## [Unreleased] — M8-P1.5 v2
 
 ### Added
