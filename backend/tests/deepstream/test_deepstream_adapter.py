@@ -74,15 +74,13 @@ class TestSharedPipeline:
         assert adapter._states[0].pipeline is adapter._shared_pipeline
         assert adapter._states[1].pipeline is adapter._shared_pipeline
 
-    def test_removing_last_channel_destroys_shared_pipeline(self, adapter, tmp_path):
-        """When the last channel is removed, the shared pipeline is torn down."""
-        adapter.start()
-        v0 = tmp_path / "a.mp4"
-        v0.write_bytes(b"fake")
-        adapter.add_channel(0, str(v0))
-        adapter.remove_channel(0)
-
-        assert adapter._shared_pipeline is None
+    # Note: the previous "remove last channel destroys shared pipeline"
+    # invariant was retired in #123. After every source has been
+    # soft-removed (the post-#122 behaviour), calling pipeline.stop()
+    # crashes pyservicemaker's C++ side. The dormant mux/infer/tracker
+    # is harmless; final teardown happens at /pipeline/stop or process
+    # exit. See TestSoftRemoveOnReview.test_remove_last_channel_keeps_
+    # pipeline_alive for the current invariant.
 
     def test_removing_one_channel_keeps_pipeline_for_others(self, adapter, tmp_path):
         """Removing one channel doesn't affect the shared pipeline if others remain."""
@@ -297,18 +295,28 @@ class TestSoftRemoveOnReview:
         assert 1 in adapter.channels
         assert adapter._states[1].pipeline is pipeline_before
 
-    def test_remove_last_channel_destroys_pipeline(self, adapter, tmp_path):
-        """When the *last* remaining channel is removed, the dormant mux +
-        infer + tracker should be torn down so we don't leak resources."""
+    def test_remove_last_channel_keeps_pipeline_alive(self, adapter, tmp_path):
+        """When the last channel is removed, the shared pipeline stays up
+        in dormant form (mux/infer/tracker waiting for data that won't
+        come). Auto-destroying here crashes pyservicemaker after every
+        source has been soft-removed (#123); the harmless dormant pipeline
+        is cleaned up at /pipeline/stop or process exit instead.
+        """
         adapter.start()
         v1 = tmp_path / "v1.mp4"
         v1.write_bytes(b"fake")
         adapter.add_channel(0, str(v1))
-        assert adapter._shared_pipeline is not None
+        pipeline_before = adapter._shared_pipeline
+        assert pipeline_before is not None
 
         adapter.remove_channel(0)
 
-        assert adapter._shared_pipeline is None
+        # Pipeline kept alive: the source has been soft-removed but the
+        # broader pipeline is the same instance.
+        assert adapter._shared_pipeline is pipeline_before
+        # Channel state is gone from public-facing collections.
+        assert 0 not in adapter.channels
+        assert 0 not in adapter._states
 
 
 class TestCallbacks:

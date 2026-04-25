@@ -268,6 +268,14 @@ class DeepStreamPipeline:
         the batch router, nullifies callbacks) instead of tearing down and
         rebuilding the entire shared pipeline. Other channels keep
         producing frames at source rate during this operation (B12).
+
+        We do NOT auto-destroy the shared pipeline when the last channel
+        is removed. After every source has been soft-removed, calling
+        pipeline.stop() inside the deferred-stop daemon thread crashes
+        pyservicemaker's C++ side ('terminate called without an active
+        exception', #123). The dormant mux/infer/tracker is harmless;
+        final teardown happens on /pipeline/stop or process exit, which
+        run a different code path that doesn't soft-remove first.
         """
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")
@@ -275,10 +283,6 @@ class DeepStreamPipeline:
         self._cleanup_channel_snapshots(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
-        # If this was the last channel, fully tear the pipeline down so we
-        # don't leave a dormant nvstreammux + nvinfer running.
-        if not self._states:
-            self._destroy_shared_pipeline()
         logger.info("Channel %d removed", channel_id)
 
     def configure_channel(
@@ -636,7 +640,14 @@ class DeepStreamPipeline:
         )
 
     def _destroy_shared_pipeline(self) -> None:
-        """Tear down the shared pipeline."""
+        """Tear down the shared pipeline.
+
+        Mirrors the ``_rebuild_shared_pipeline`` deferred-stop pattern:
+        ``wait()`` first so the pipeline drains to a state where ``stop()``
+        won't crash pyservicemaker's C++ side ('terminate called without an
+        active exception', #123). For HLS sources, ``wait()`` blocks
+        forever — the daemon thread is killed on process exit anyway.
+        """
         if self._shared_pipeline is None:
             return
         import threading as _threading
@@ -647,6 +658,7 @@ class DeepStreamPipeline:
 
         def _deferred_stop():
             try:
+                pipeline.wait()
                 pipeline.stop()
             except Exception:
                 pass
