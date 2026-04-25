@@ -51,6 +51,10 @@ class NvDecoder:
         self._nv12_height = int(self._height * 3 // 2)
         self._frame_buffer: list[tuple[cp.ndarray, int]] = []
         self._eos = False
+        # Seek epoch is bumped every time the demuxer is rewound (Setup loop).
+        # Consumers can compare to detect "decoder seeked" without inspecting
+        # PTS deltas — see CustomPipeline._pipeline_loop / _display_loop.
+        self._seek_epoch = 0
 
         logger.info(
             "NvDecoder: %s (%dx%d @ %.1ffps, loop=%s, hls=%s)",
@@ -166,11 +170,13 @@ class NvDecoder:
         return owned, pts_ms
 
     def _restart(self):
-        """Seek to beginning for loop mode."""
+        """Seek to beginning for loop mode. Bumps seek_epoch so consumers
+        can re-anchor their PTS-pacing baselines."""
         self._demuxer.Seek(0)
         self._eos = False
         self._frame_buffer.clear()
-        logger.debug("NvDecoder: looping %s", self._source[:80])
+        self._seek_epoch += 1
+        logger.debug("NvDecoder: looping %s (epoch=%d)", self._source[:80], self._seek_epoch)
 
     def reconnect(self, new_source: str) -> None:
         """Reconnect to a new HLS URL (for stream recovery).
@@ -230,3 +236,10 @@ class NvDecoder:
     @property
     def is_hls(self) -> bool:
         return self._is_hls
+
+    @property
+    def seek_epoch(self) -> int:
+        """Monotonically increasing counter; incremented every time the
+        decoder is rewound to the start of the source (Setup-phase loop).
+        Consumers compare against a previous value to detect a seek."""
+        return self._seek_epoch
