@@ -1,8 +1,6 @@
 """Tests for M3 Phase 0: Backend prerequisites for React UI."""
 
-import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -176,59 +174,135 @@ class TestAlertChannelFilter:
 
 
 class TestWsTypesFilter:
+    @staticmethod
+    def _client(broadcaster, channels=None, types=None):
+        from unittest.mock import MagicMock
+        from backend.api.websocket import _ClientChannel
+        c = _ClientChannel(ws=MagicMock(), channels=channels, types=types)
+        broadcaster._clients.append(c)
+        return c
+
     def test_type_filter_allows_matching(self):
         broadcaster = WsBroadcaster()
-        ws = MagicMock()
-        ws.send_text = AsyncMock()
-        broadcaster._clients = [(ws, None, {"transit_alert"})]
-
-        msg = {"type": "transit_alert", "channel": 0, "alert_id": "abc"}
-        asyncio.run(broadcaster._broadcast(msg))
-        ws.send_text.assert_called_once()
+        c = self._client(broadcaster, types={"transit_alert"})
+        broadcaster._fanout({"type": "transit_alert", "channel": 0, "alert_id": "abc"})
+        assert c.queue.qsize() == 1
 
     def test_type_filter_blocks_non_matching(self):
         broadcaster = WsBroadcaster()
-        ws = MagicMock()
-        ws.send_text = AsyncMock()
-        broadcaster._clients = [(ws, None, {"transit_alert"})]
-
-        msg = {"type": "frame_data", "channel": 0, "frame": 1}
-        asyncio.run(broadcaster._broadcast(msg))
-        ws.send_text.assert_not_called()
+        c = self._client(broadcaster, types={"transit_alert"})
+        broadcaster._fanout({"type": "frame_data", "channel": 0, "frame": 1})
+        assert c.queue.qsize() == 0
 
     def test_no_type_filter_receives_all(self):
         broadcaster = WsBroadcaster()
-        ws = MagicMock()
-        ws.send_text = AsyncMock()
-        broadcaster._clients = [(ws, None, None)]
-
+        c = self._client(broadcaster)
         for msg_type in ["frame_data", "transit_alert", "pipeline_event"]:
-            msg = {"type": msg_type}
-            asyncio.run(broadcaster._broadcast(msg))
-        assert ws.send_text.call_count == 3
+            broadcaster._fanout({"type": msg_type})
+        assert c.queue.qsize() == 3
 
     def test_combined_channel_and_type_filter(self):
         broadcaster = WsBroadcaster()
-        ws = MagicMock()
-        ws.send_text = AsyncMock()
-        # Only channel 0 + only transit_alert
-        broadcaster._clients = [(ws, {0}, {"transit_alert"})]
+        c = self._client(broadcaster, channels={0}, types={"transit_alert"})
 
         # Channel 0, transit_alert — should pass
-        asyncio.run(broadcaster._broadcast({"type": "transit_alert", "channel": 0}))
-        assert ws.send_text.call_count == 1
+        broadcaster._fanout({"type": "transit_alert", "channel": 0})
+        assert c.queue.qsize() == 1
 
         # Channel 1, transit_alert — blocked by channel filter
-        asyncio.run(broadcaster._broadcast({"type": "transit_alert", "channel": 1}))
-        assert ws.send_text.call_count == 1
+        broadcaster._fanout({"type": "transit_alert", "channel": 1})
+        assert c.queue.qsize() == 1
 
         # Channel 0, frame_data — blocked by type filter
-        asyncio.run(broadcaster._broadcast({"type": "frame_data", "channel": 0}))
-        assert ws.send_text.call_count == 1
+        broadcaster._fanout({"type": "frame_data", "channel": 0})
+        assert c.queue.qsize() == 1
 
     def test_ws_endpoint_parses_types_param(self, client):
         with client.websocket_connect("/ws?types=transit_alert,stagnant_alert"):
             pass
+
+
+class TestWsHeadOfLineIsolation:
+    """A slow WS client must not block delivery to fast clients (B8)."""
+
+    def test_slow_client_does_not_starve_fast_client(self):
+        """One client whose send_text is artificially slow should not delay
+        the queue of another client. Each client owns its own queue + task,
+        so the fast client's queue receives the message synchronously inside
+        ``_fanout`` regardless of the slow one's progress."""
+        from unittest.mock import MagicMock
+        from backend.api.websocket import WsBroadcaster, _ClientChannel
+
+        broadcaster = WsBroadcaster()
+        slow = _ClientChannel(ws=MagicMock(), channels=None, types=None)
+        fast = _ClientChannel(ws=MagicMock(), channels=None, types=None)
+        broadcaster._clients = [slow, fast]
+
+        # Don't start tasks — just verify the synchronous fan-out step puts
+        # the message in BOTH queues even if the slow client never drains.
+        for i in range(50):
+            broadcaster._fanout({"type": "frame_data", "frame": i})
+
+        assert slow.queue.qsize() == 50
+        assert fast.queue.qsize() == 50
+
+    def test_slow_client_drops_oldest_when_full(self):
+        """When a single client's queue fills up, the broadcaster drops the
+        oldest message from THAT client's queue only — without affecting any
+        other client or back-pressuring producers."""
+        from unittest.mock import MagicMock
+        from backend.api.websocket import WsBroadcaster, _CLIENT_QUEUE_MAXSIZE, _ClientChannel
+
+        broadcaster = WsBroadcaster()
+        slow = _ClientChannel(ws=MagicMock(), channels=None, types=None)
+        broadcaster._clients = [slow]
+
+        # Push twice the queue's capacity; producers never block.
+        n = _CLIENT_QUEUE_MAXSIZE * 2
+        for i in range(n):
+            broadcaster._fanout({"type": "frame_data", "frame": i})
+
+        # Queue is full but bounded — no exception, no producer stall.
+        assert slow.queue.qsize() == _CLIENT_QUEUE_MAXSIZE
+
+    def test_dead_send_does_not_break_other_clients(self):
+        """If one client's send_text raises (TCP close, etc.), the other
+        client's task continues uninterrupted."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from backend.api.websocket import WsBroadcaster, _ClientChannel
+
+        async def scenario():
+            broadcaster = WsBroadcaster()
+            await broadcaster.start()
+
+            ws_dead = MagicMock()
+            ws_dead.send_text = AsyncMock(side_effect=RuntimeError("connection closed"))
+            ws_alive = MagicMock()
+            ws_alive.send_text = AsyncMock()
+
+            dead_client = _ClientChannel(ws=ws_dead, channels=None, types=None)
+            alive_client = _ClientChannel(ws=ws_alive, channels=None, types=None)
+            dead_client.task = asyncio.create_task(broadcaster._client_loop(dead_client))
+            alive_client.task = asyncio.create_task(broadcaster._client_loop(alive_client))
+            broadcaster._clients = [dead_client, alive_client]
+
+            broadcaster._fanout({"type": "ping"})
+            broadcaster._fanout({"type": "pong"})
+
+            # Give both client tasks a turn to drain their queues.
+            await asyncio.sleep(0.05)
+
+            assert ws_alive.send_text.call_count == 2
+            # Dead client errors out on first send, second message is then
+            # left in its queue (task already exited).
+            assert ws_dead.send_text.call_count == 1
+            assert not dead_client.alive
+            assert dead_client not in broadcaster._clients
+
+            await broadcaster.stop()
+
+        asyncio.run(scenario())
 
 
 # -- phase_changed WS event --

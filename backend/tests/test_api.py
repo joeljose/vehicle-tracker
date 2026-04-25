@@ -394,47 +394,38 @@ class TestWsBroadcaster:
         assert msg["type"] == "pipeline_event"
         assert msg["event"] == "stopped"
 
-    def test_broadcast_filters_by_channel(self):
-        """Verify _broadcast respects channel filtering."""
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-        from backend.api.websocket import WsBroadcaster
+    def test_fanout_filters_by_channel(self):
+        """Per-client fan-out respects channel filtering."""
+        from unittest.mock import MagicMock
+        from backend.api.websocket import WsBroadcaster, _ClientChannel
 
         broadcaster = WsBroadcaster()
 
-        # Create mock WS clients
+        # Two simulated clients: one unfiltered, one channel-0-only.
         ws_all = MagicMock()
-        ws_all.send_text = AsyncMock()
+        client_all = _ClientChannel(ws=ws_all, channels=None, types=None)
         ws_ch0 = MagicMock()
-        ws_ch0.send_text = AsyncMock()
+        client_ch0 = _ClientChannel(ws=ws_ch0, channels={0}, types=None)
+        broadcaster._clients = [client_all, client_ch0]
 
-        broadcaster._clients = [
-            (ws_all, None, None),  # no filter — receives all
-            (ws_ch0, {0}, None),  # only channel 0
-        ]
+        # Fan-out a channel-1 message — only ws_all should receive it.
+        broadcaster._fanout({"type": "track_ended", "channel": 1, "track_id": 5})
 
-        # Broadcast a channel 1 message
-        msg = {"type": "track_ended", "channel": 1, "track_id": 5}
-        asyncio.run(broadcaster._broadcast(msg))
+        assert client_all.queue.qsize() == 1
+        assert client_ch0.queue.qsize() == 0
 
-        # ws_all should receive it, ws_ch0 should NOT
-        ws_all.send_text.assert_called_once()
-        ws_ch0.send_text.assert_not_called()
-
-    def test_broadcast_no_channel_goes_to_all(self):
-        """Messages without a channel field go to all clients."""
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-        from backend.api.websocket import WsBroadcaster
+    def test_fanout_no_channel_goes_to_all(self):
+        """Messages without a channel field reach every client."""
+        from unittest.mock import MagicMock
+        from backend.api.websocket import WsBroadcaster, _ClientChannel
 
         broadcaster = WsBroadcaster()
-
         ws_ch0 = MagicMock()
-        ws_ch0.send_text = AsyncMock()
-        broadcaster._clients = [(ws_ch0, {0}, None)]
+        client_ch0 = _ClientChannel(ws=ws_ch0, channels={0}, types=None)
+        broadcaster._clients = [client_ch0]
 
-        msg = {"type": "pipeline_event", "event": "started", "detail": "test"}
-        asyncio.run(broadcaster._broadcast(msg))
+        broadcaster._fanout(
+            {"type": "pipeline_event", "event": "started", "detail": "test"}
+        )
 
-        # pipeline_event has no channel — should be sent
-        ws_ch0.send_text.assert_called_once()
+        assert client_ch0.queue.qsize() == 1
