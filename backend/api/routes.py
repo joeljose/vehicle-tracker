@@ -294,8 +294,6 @@ def update_config(
 ):
     if body.confidence_threshold is not None:
         backend.set_confidence_threshold(body.confidence_threshold)
-    if body.inference_interval is not None:
-        backend.set_inference_interval(body.inference_interval)
     return StatusResponse(status="updated")
 
 

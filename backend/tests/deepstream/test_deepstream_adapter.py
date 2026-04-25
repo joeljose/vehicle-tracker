@@ -255,10 +255,6 @@ class TestConfiguration:
         adapter.set_confidence_threshold(0.8)
         assert adapter._confidence_threshold == 0.8
 
-    def test_set_inference_interval(self, adapter):
-        adapter.set_inference_interval(15)
-        assert adapter._inference_interval == 15
-
 
 class TestGetSnapshot:
     def test_returns_none_when_no_channels(self, adapter):
@@ -368,7 +364,7 @@ class TestTrackingReporterCallbacks:
         traj = TrajectoryBuffer()
         traj.append(50, 50, 0)
 
-        reporter._finalize_lost_track(
+        reporter.finalize_lost_track(
             42,
             {
                 "dsm": mock_dsm,
@@ -401,7 +397,7 @@ class TestTrackingReporterCallbacks:
         traj = TrajectoryBuffer()
         traj.append(50, 50, 0)
 
-        reporter._finalize_lost_track(
+        reporter.finalize_lost_track(
             10,
             {
                 "dsm": mock_dsm,

@@ -97,10 +97,6 @@ class PipelineBackend(Protocol):
         """Update detection confidence threshold at runtime."""
         ...
 
-    def set_inference_interval(self, interval: int) -> None:
-        """Set nvinfer interval (0=every frame, 15=idle mode)."""
-        ...
-
     def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         """Register callback invoked per-channel per-frame with detection results.
 

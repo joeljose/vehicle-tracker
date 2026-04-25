@@ -1,16 +1,17 @@
 """DeepStream pipeline configuration."""
 
-from pathlib import Path
-
 # Paths inside the container
 PGIE_CONFIG = "/app/config/deepstream/pgie_config.yml"
 TRACKER_CONFIG = "/app/config/deepstream/tracker_config.yml"
 TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 LABELS_FILE = "/app/config/deepstream/labels.txt"
 
-# Model paths (inside the container)
-MODEL_DIR = Path("/app/models")
-ONNX_MODEL = MODEL_DIR / "yolov8s_nms.onnx"
+# The ONNX model path is configured in pgie_config.yml — nvinfer reads it
+# directly. Python doesn't load the model itself, so there's no Python-side
+# constant for it. (Pre-M8-P1.5 v2 there was an ONNX_MODEL constant pointing
+# at yolov8s_nms.onnx; both that constant and the export_yolov8s_nms.py
+# script were unused after the migration to the fine-tuned single-class
+# student.)
 
 # Pipeline defaults
 DEFAULT_STREAMMUX_WIDTH = 1920

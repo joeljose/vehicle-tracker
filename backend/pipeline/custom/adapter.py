@@ -97,9 +97,6 @@ class _ChannelState:
     # Last clean BGR frame, kept for Phase-3 last-frame persistence. Encoded to
     # JPEG only on phase transition, not every frame (B3).
     last_frame_bgr: object | None = None
-    # Backwards-compat: tests still reference `last_frame_jpeg`. We populate it
-    # lazily inside `_persist_last_frame` and otherwise leave it None.
-    last_frame_jpeg: bytes | None = None
 
 
 class CustomPipeline:
@@ -284,10 +281,6 @@ class CustomPipeline:
     def set_confidence_threshold(self, threshold: float) -> None:
         if self._detector:
             self._detector.set_confidence_threshold(threshold)
-
-    def set_inference_interval(self, interval: int) -> None:
-        # Applied per-channel via idle optimizer
-        pass
 
     # -- Callbacks --
 
@@ -1104,20 +1097,10 @@ class CustomPipeline:
         from pathlib import Path
 
         state = self._states.get(channel_id)
-        if state is None:
+        if state is None or state.last_frame_bgr is None:
             return
 
-        # Prefer the cached BGR (current path); fall back to a pre-existing
-        # JPEG if a test or reconnect-flow stored one directly.
-        jpeg: bytes | None = None
-        if state.last_frame_bgr is not None:
-            jpeg = self._renderer.encode_clean(state.last_frame_bgr)
-            state.last_frame_jpeg = jpeg
-        elif isinstance(state.last_frame_jpeg, bytes):
-            jpeg = state.last_frame_jpeg
-
-        if jpeg is None:
-            return
+        jpeg = self._renderer.encode_clean(state.last_frame_bgr)
 
         frame_dir = Path("snapshots") / str(channel_id)
         frame_dir.mkdir(parents=True, exist_ok=True)

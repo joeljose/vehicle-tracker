@@ -29,7 +29,6 @@ class SetPhaseRequest(BaseModel):
 
 class UpdateConfigRequest(BaseModel):
     confidence_threshold: float | None = None
-    inference_interval: int | None = None
 
 
 class SiteConfigRequest(BaseModel):

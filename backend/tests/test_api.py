@@ -148,20 +148,6 @@ class TestConfig:
         assert resp.json() == {"status": "updated"}
         assert app.state.backend.confidence_threshold == 0.7
 
-    def test_update_inference_interval(self, client, app):
-        resp = client.patch("/config", json={"inference_interval": 5})
-        assert resp.status_code == 200
-        assert app.state.backend.inference_interval == 5
-
-    def test_update_both(self, client, app):
-        resp = client.patch(
-            "/config",
-            json={"confidence_threshold": 0.3, "inference_interval": 10},
-        )
-        assert resp.status_code == 200
-        assert app.state.backend.confidence_threshold == 0.3
-        assert app.state.backend.inference_interval == 10
-
     def test_update_empty_body(self, client):
         resp = client.patch("/config", json={})
         assert resp.status_code == 200

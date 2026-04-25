@@ -300,7 +300,7 @@ class TrackingReporter(BatchMetadataOperator):
 
                 # Expire old stitcher tracks — do deferred processing
                 for exp_tid, exp_state in self.stitcher.expire(self.frame_count):
-                    self._finalize_lost_track(exp_tid, exp_state)
+                    self.finalize_lost_track(exp_tid, exp_state)
 
                 # Detect lost tracks (not seen this frame)
                 lost_ids = [
@@ -370,8 +370,12 @@ class TrackingReporter(BatchMetadataOperator):
         except Exception as e:
             logger.error("TrackingReporter: %s", e)
 
-    def _finalize_lost_track(self, tid: int, stitcher_state: dict) -> None:
-        """Handle a track that expired from the stitcher (no merge found)."""
+    def finalize_lost_track(self, tid: int, stitcher_state: dict) -> None:
+        """Handle a track that expired from the stitcher (no merge found).
+
+        Public so the adapter / standalone run_pipeline path can drain
+        remaining stitcher state on shutdown without reaching into a private.
+        """
         seq_tid = self._seq_id(tid)
 
         def on_alert(alert):
@@ -637,7 +641,7 @@ def run_pipeline(
 
     # Finalize remaining stitcher tracks (no merge will happen)
     for tid, state in list(reporter.stitcher.lost_tracks.items()):
-        reporter._finalize_lost_track(tid, state)
+        reporter.finalize_lost_track(tid, state)
     reporter.stitcher.lost_tracks.clear()
 
     # Save any remaining active tracks' photos
