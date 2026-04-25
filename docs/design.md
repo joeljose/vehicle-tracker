@@ -180,9 +180,9 @@ class PipelineBackend(Protocol):
         """Update detection confidence threshold at runtime."""
         ...
 
-    def set_inference_interval(self, interval: int) -> None:
-        """Set nvinfer interval (0=every frame, 15=idle mode)."""
-        ...
+    # Note: set_inference_interval was removed post-M8 — idle optimization
+    # writes the nvinfer interval directly via infer_node.set({"interval": …})
+    # rather than going through the Protocol.
 
     def register_frame_callback(self, callback: Callable[[FrameResult], None]) -> None:
         """Register callback invoked per-channel per-frame with detection results.
@@ -910,7 +910,9 @@ When a scene is empty (e.g., all traffic stopped at a red light off-camera), run
 **Implementation:**
 
 - DeepStream: `pipeline["nvinfer_name"].set({"interval": 15})` for idle, `.set({"interval": 0})` for active (pyservicemaker Node API — dict syntax, not key-value).
-- Custom: skip the TensorRT inference call on non-inference frames, pass empty detections to tracker.
+- Custom: skip the TensorRT inference call on non-inference frames, but **continue rendering and emitting** the display frame using the last computed tracks list. Skipping render alongside inference (the pre-post-M8 behaviour) caused a visible feed freeze of ~250 ms at idle interval=15 (B5).
+
+**Composition with the 30 FPS processing cap (custom):** the rate cap drops every other frame on 60 FPS sources before idle even gets a chance to act. So at idle on a 60 FPS source, the active-mode rate is 30 FPS and the idle inference rate is 30/15 = 2 FPS, while the display still emits at 30 FPS by reusing the last tracks. On 30 FPS sources, the rate cap is a no-op and the math is unchanged.
 
 ---
 
@@ -959,6 +961,17 @@ MJPEG is chosen for live view because:
 - Latency is frame-level (~33ms at 30fps).
 
 The `<canvas>` overlay sits on top of the `<img>` element, pixel-aligned. In Phase 1, the operator draws ROI polygon and entry/exit lines on this canvas. In Phase 2, the canvas is used for any frontend-side overlays (e.g., direction indicators).
+
+**Pacing and back-pressure (custom backend):** The pipeline thread renders into a bounded `display_queue` and the display thread emits at PTS rate. To keep playback time = source time:
+
+- The pipeline thread does a *blocking* `display_queue.put` so the decoder is naturally rate-limited to the display rate (no draining ahead of display, no premature EOS).
+- The display thread drops late frames when wall-clock has fallen >100 ms behind the queued frame's PTS, re-anchoring instead of accumulating drift.
+- The decoder bumps a `seek_epoch` counter on Setup-loop seeks; the display thread re-anchors its PTS baseline + drains stale queue entries when it sees an epoch change.
+- TRT context + the two CuPy RawKernels (NV12→RGB, NV12→BGR) are warmed up at `start()` so the first real frame doesn't pay one-time NVRTC compile / TRT lazy-init costs.
+
+**Pacing (DeepStream backend):** All of the above is provided "for free" by `fakesink sync=True` on each per-channel branch and GStreamer's clock model. The display rate is gated by the upstream sink's wall-clock alignment to PTS; back-pressure flows up through the queue to `nvurisrcbin`.
+
+**Per-client WebSocket fan-out:** Frame-level events (`frame_data`, `stats_update`, `transit_alert`) flow through `WsBroadcaster`. Each connected WebSocket has its own bounded `asyncio.Queue` + drain task; on full, oldest is dropped. A slow consumer (frozen tab, dev-tools throttling) only loses its own backlog and cannot stall delivery to other clients (was a serial drain loop pre-#116).
 
 ### 13.2 Phase 3 Replay — Transit Alert (Recorded Video)
 
@@ -1563,39 +1576,29 @@ frontend/src/
 
 ## 22. Detection Model
 
-### DeepStream Pipeline: TrafficCamNet
+### Both pipelines: fine-tuned single-class YOLOv8s student (M8-P1.5 v2)
 
-TrafficCamNet is the default model for the DeepStream pipeline. It is purpose-built for traffic scenes and ships with DeepStream, requiring no finetuning for v1.
+Both backends now run the **same** fine-tuned single-class YOLOv8s student that was trained against RF-DETR-M auto-labels in M8-P1.5 v2. The model emits a single class id 0 = `vehicle` (cars, trucks, buses, motorcycles all collapsed). This replaces the historical TrafficCamNet (DS) / COCO-pretrained YOLOv8s (custom) configurations.
 
-- **Classes:** car, bicycle, person, road_sign (4 classes; filter to car only for junction monitoring). Note: TrafficCamNet groups all vehicle types (cars, trucks, buses, motorcycles) under a single "car" class — typed vehicle classification requires a secondary classifier (VehicleTypeNet) or finetuning (v2).
-- **Input:** 960x544, FP16/INT8
-- **Architecture:** DetectNet_v2 (ResNet18 backbone)
-- **Integration:** Native `nvinfer` config, no custom parser needed
+- **Architecture:** YOLOv8s (~11.2 M params)
+- **Output:** single tensor of shape `(1, 5, 8400)` — 4 bbox coords + 1 class score per anchor (no per-anchor argmax needed; no COCO vehicle-id filter)
+- **Input:** 640×640 letterboxed, FP16
+- **DeepStream integration:** custom YOLOv8 C++ bbox parser in `deepstream_parsers/`, configured by `pgie_config.yml` (`num-detected-classes: 1`, single-line `labels.txt`, `pre-cluster-threshold: 0.25`)
+- **Custom integration:** ONNX is loaded directly into a TensorRT engine via `engine_builder.ensure_engine`; `TRTDetector._postprocess` slices the (1, 5, 8400) tensor without argmax
 
-### Custom Pipeline: YOLOv8s (COCO)
+The training pipeline (frame extraction → PHash dedup → auto-label → split → fine-tune → export ONNX) lives under `training/` with its own PRD/design (`training/docs/`) and Makefile targets (`make train-*`).
 
-YOLOv8s pretrained on COCO is used for the custom pipeline. Vehicle classes (car, truck, bus, motorcycle) are filtered from the 80-class COCO output. No finetuning for v1.
+### Why both backends share a model
 
-### Model Comparison
+Apples-to-apples comparison: the only thing that varies between backends is the integration and the runtime path (NVDEC + GStreamer vs PyNvVideoCodec + CuPy). Detection accuracy is the same; throughput differences come from the pipeline shape, not the model.
 
-| Model | Params | mAP50 (COCO) | TRT INT8 fps* | VRAM | Pipeline |
-|---|---|---|---|---|---|
-| TrafficCamNet | ~12 M | N/A (proprietary) | ~150 fps | ~350 MB | DeepStream |
-| YOLOv8n | 3.2 M | 37.3 | ~180 fps | ~280 MB | Custom (alt) |
-| **YOLOv8s** | **11.2 M** | **44.9** | **~120 fps** | **~380 MB** | **Custom** |
-| YOLOv8m | 25.9 M | 50.2 | ~75 fps | ~560 MB | — |
-| YOLOv9s | 7.1 M | 46.8 | ~110 fps | ~340 MB | — |
-| RT-DETR-s | 20 M | 48.1 | ~60 fps | ~620 MB | — |
+### Historical context
 
-*Estimated on RTX 4050 Mobile, 640x640 input, batch=1*
+The pre-M8 model setup was:
+- **DeepStream:** TrafficCamNet (4-class proprietary DetectNet_v2). Vehicle types collapsed under "car".
+- **Custom:** YOLOv8s pretrained on COCO 80-class; runtime filter to car/truck/bus/motorcycle.
 
-### Finetuning (v2)
-
-Finetuning is deferred to v2. When pursued:
-- Collect 500-2000 frames from target junctions.
-- Annotate with Roboflow or CVAT.
-- Finetune YOLOv8s with frozen backbone (first 10 layers).
-- Export to TensorRT INT8 using scene-specific calibration images.
+Both were swapped to the fine-tuned single-class student in M8-P1.5 v2 because (a) the project never needed typed-vehicle classification and (b) fine-tuning gave better recall on the project's actual scenes than either prebuilt model. See `docs/changelog.md` for the migration details and the legacy `ONNX_MODEL` constant + `scripts/export_yolov8s_nms.py` removal in the post-M8 cleanup.
 
 ---
 

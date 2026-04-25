@@ -79,7 +79,7 @@ make down             # Stop everything
 ### Testing & Quality
 
 ```bash
-make test             # Run all tests (363 tests, no GPU needed)
+make test             # Run all tests (367 on DS, 296 on custom; no GPU needed)
 make test-v           # Verbose (show test names)
 make lint             # Ruff check
 make format           # Ruff auto-fix
@@ -112,39 +112,62 @@ make tag              # Show recent tags + instructions
 ## Architecture
 
 ```
-Browser (React) <-> FastAPI (REST + WebSocket + MJPEG) <-> DeepStream Pipeline (GPU)
+Browser (React) <-> FastAPI (REST + WebSocket + MJPEG) <-> Pipeline backend (GPU)
+                                                            |
+                                              +-------------+-------------+
+                                              |                           |
+                                       DeepStream backend           Custom backend
+                                       (default, M5+)               (M7+, hackable)
 ```
 
-The FastAPI layer communicates with the pipeline through a `PipelineBackend` Protocol interface, keeping the API layer pipeline-agnostic.
+The FastAPI layer talks to the pipeline through a `PipelineBackend` Protocol so the API stays pipeline-agnostic. Pick the backend at startup with `VT_BACKEND=deepstream` (default) or `VT_BACKEND=custom`. Both run the same fine-tuned single-class YOLOv8s student (M8-P1.5 v2).
 
-**Shared pipeline topology:**
+**DeepStream backend topology** (shared across channels):
 ```
 src_0 (nvurisrcbin) --+
 src_1 (nvurisrcbin) --+--> nvstreammux -> nvinfer -> nvtracker -> nvstreamdemux
-                      |    (TrafficCamNet)  (NvDCF)                  |-> ch0: OSD -> MJPEG
+                      |                                              |-> ch0: OSD -> MJPEG
                       |                                              |-> ch1: OSD -> MJPEG
-                      |   BatchMetadataRouter routes per-source metadata
+                      |   BatchMetadataRouter routes per-source metadata; phase
+                      |   transitions on one channel use _soft_remove_source so
+                      |   they don't disturb other channels.
 ```
+
+**Custom backend topology** (per channel):
+```
+NVDEC (PyNvVideoCodec) --> CuPy preprocess --> direct TensorRT --> CPU NMS
+                                                                       |
+                                                  BoT-SORT (HSV ReID) <+
+                                                          |
+                                                          +--> analytics + render JPEG
+                                                                       |
+                                                          display_queue (PTS-paced)
+                                                                       |
+                                                                     MJPEG
+```
+Processing is capped at 30 FPS; the source is decoded at native rate but every other frame is dropped on 60 FPS sources, matching the tracker's frame_rate=30 assumption and saving ~50% GPU/CPU. Replay clips in Review are produced by ffmpeg directly from the original source file at full source FPS.
 
 ## Project Structure
 
 ```
 vehicle-tracker/
   backend/
-    api/                 # FastAPI routes, WebSocket, MJPEG streaming
+    api/                 # FastAPI routes, WebSocket (per-client queues), MJPEG
     config/              # Site config model + saved junction configs
     pipeline/
-      deepstream/        # DeepStream adapter (GPU pipeline)
+      deepstream/        # DeepStream adapter (shared GPU pipeline)
+      custom/            # Custom adapter: NVDEC + CuPy + TRT + BoT-SORT
       protocol.py        # PipelineBackend Protocol interface
       direction.py       # Line-crossing + direction state machine
       roi.py             # ROI polygon filtering
       alerts.py          # AlertStore (transit + stagnant)
       snapshot.py        # Best-photo capture
-      clip_extractor.py  # ffmpeg clip extraction for replay
+      clip_extractor.py  # ffmpeg clip extraction for replay (race-safe)
       fake.py            # Test backend (no GPU needed)
-    tests/               # 371 tests
+    tests/               # 367 tests on DS, 296 on custom (backend-gated)
     main.py              # FastAPI app factory
-    Dockerfile
+    Dockerfile.deepstream
+    Dockerfile.custom
   frontend/
     src/
       pages/             # Home, Channel
@@ -172,6 +195,9 @@ vehicle-tracker/
 | M4 — DeepStream-FastAPI integration | v0.4.0 | 312 |
 | M5 — Multi-channel shared pipeline | v0.5.0 | 336 |
 | M6 — YouTube Live streams | v0.6.0 | 371 |
+| M7 — Custom GPU-resident pipeline | v0.7.0 | 291 (custom) + 363 (DS) |
+| M8 — Custom model training (P1.5 v2) | v0.8.0-dev | same — both backends share the new student |
+| Post-M8 hardening | (unreleased) | 296 (custom) + 367 (DS) — playback pacing, WS HoL, clip-extractor race, HLS init bound, DS soft-remove |
 
 ## Target Junctions
 

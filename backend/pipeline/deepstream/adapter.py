@@ -126,21 +126,36 @@ class MjpegExtractor(BufferOperator):
                 )
                 jpeg_bytes = jpeg_buf.tobytes()
 
-                # Build detections from reporter's active tracks
+                # Build detections from reporter's active tracks. Pull the
+                # latest bbox + confidence out of per_frame_data so the WS
+                # protocol matches the custom backend (B13). OSD already
+                # drew boxes onto the JPEG, but the structured Detection
+                # carries the same data for any consumer that derives
+                # geometry from the WS feed (e.g. trajectory rendering).
                 detections = []
                 for tid, track in self._reporter.active_tracks.items():
                     traj = track["trajectory"].get_full()
-                    if traj:
-                        cx, cy = traj[-1][0], traj[-1][1]
-                        detections.append(
-                            Detection(
-                                track_id=self._reporter._seq_id(tid),
-                                class_name=track["label"],
-                                bbox=(0, 0, 0, 0),  # OSD already drew boxes
-                                confidence=0.0,
-                                centroid=(cx, cy),
-                            )
+                    if not traj:
+                        continue
+                    cx, cy = traj[-1][0], traj[-1][1]
+                    pfd = track.get("per_frame_data") or []
+                    if pfd:
+                        last = pfd[-1]
+                        bbox_list = last.get("bbox") or [0, 0, 0, 0]
+                        bbox = tuple(int(v) for v in bbox_list)
+                        confidence = float(last.get("confidence", 0.0))
+                    else:
+                        bbox = (0, 0, 0, 0)
+                        confidence = 0.0
+                    detections.append(
+                        Detection(
+                            track_id=self._reporter._seq_id(tid),
+                            class_name=track["label"],
+                            bbox=bbox,
+                            confidence=confidence,
+                            centroid=(cx, cy),
                         )
+                    )
 
                 result = FrameResult(
                     channel_id=self._channel_id,
@@ -247,13 +262,23 @@ class DeepStreamPipeline:
         logger.info("Channel %d added: %s (type=%s)", channel_id, source, source_type)
 
     def remove_channel(self, channel_id: int) -> None:
+        """Remove a channel without disturbing other active channels.
+
+        Uses _soft_remove_source (drains via file-loop=False, removes from
+        the batch router, nullifies callbacks) instead of tearing down and
+        rebuilding the entire shared pipeline. Other channels keep
+        producing frames at source rate during this operation (B12).
+        """
         if channel_id not in self.channels:
             raise KeyError(f"Channel {channel_id} not found")
-        self._finalize_channel_state(channel_id)
+        self._soft_remove_source(channel_id)
         self._cleanup_channel_snapshots(channel_id)
         del self.channels[channel_id]
         del self._states[channel_id]
-        self._rebuild_shared_pipeline()
+        # If this was the last channel, fully tear the pipeline down so we
+        # don't leave a dormant nvstreammux + nvinfer running.
+        if not self._states:
+            self._destroy_shared_pipeline()
         logger.info("Channel %d removed", channel_id)
 
     def configure_channel(
@@ -280,15 +305,20 @@ class DeepStreamPipeline:
         old_phase = state.phase
 
         if phase == ChannelPhase.ANALYTICS:
+            # Setup→Analytics needs a fresh source from frame 0 with
+            # file-loop=False; pyservicemaker can't add a nvurisrcbin to a
+            # running pipeline, so this transition still rebuilds.
             self._finalize_channel_state(channel_id)
             state.phase = ChannelPhase.ANALYTICS
             self._rebuild_shared_pipeline()
         elif phase == ChannelPhase.REVIEW:
-            # Persist last frame before finalizing (for Phase 3 replay)
+            # Analytics→Review (and the EOS auto-transition) doesn't need a
+            # restart — we just stop this channel's source and finalize its
+            # state. Soft-remove keeps other channels running uninterrupted
+            # (B12).
             self._persist_last_frame(channel_id)
-            self._finalize_channel_state(channel_id)
+            self._soft_remove_source(channel_id)
             state.phase = ChannelPhase.REVIEW
-            self._rebuild_shared_pipeline()
         else:
             state.phase = phase
 
@@ -721,18 +751,22 @@ class DeepStreamPipeline:
         )
 
     def _on_source_eos(self, channel_id: int) -> None:
-        """Handle per-source EOS — auto-transition to Review."""
+        """Handle per-source EOS — auto-transition to Review.
+
+        Uses soft-remove so other channels' streams aren't disturbed by one
+        channel reaching EOS (B12). The source is already at EOS so
+        file-loop=False is effectively a no-op, but we still drop it from
+        the batch router and nullify callbacks.
+        """
         if channel_id not in self._states:
             return
         state = self._states[channel_id]
         if state.phase != ChannelPhase.ANALYTICS:
             return
         previous = state.phase
-        # Persist last frame before finalizing (for Phase 3 replay)
         self._persist_last_frame(channel_id)
-        self._finalize_channel_state(channel_id)
+        self._soft_remove_source(channel_id)
         state.phase = ChannelPhase.REVIEW
-        self._rebuild_shared_pipeline()
         logger.info("Channel %d auto-transitioned to REVIEW (source EOS)", channel_id)
         self._safe_callback(
             self._phase_callback, channel_id, ChannelPhase.REVIEW, previous
@@ -901,14 +935,17 @@ class DeepStreamPipeline:
         )
 
     def _eject_channel(self, channel_id: int) -> None:
-        """Remove a channel due to circuit breaker trip."""
+        """Remove a channel due to circuit breaker trip.
+
+        Uses soft-remove so the eject of one flaky YouTube source doesn't
+        disrupt other channels (B12).
+        """
         state = self._states.get(channel_id)
         if state is None:
             return
         previous = state.phase
-        self._finalize_channel_state(channel_id)
+        self._soft_remove_source(channel_id)
         state.phase = ChannelPhase.REVIEW
-        self._rebuild_shared_pipeline()
         logger.info("Channel %d ejected (circuit breaker)", channel_id)
         self._safe_callback(
             self._phase_callback, channel_id, ChannelPhase.REVIEW, previous

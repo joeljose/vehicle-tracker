@@ -233,6 +233,84 @@ class TestPhaseTransitions:
             adapter.set_channel_phase(99, ChannelPhase.ANALYTICS)
 
 
+class TestSoftRemoveOnReview:
+    """Analytics→Review and remove_channel must NOT rebuild the shared
+    pipeline; that would tear down OSD/MJPEG branches for every other
+    channel and produce a visible cross-channel stutter (B12)."""
+
+    def test_review_does_not_rebuild_pipeline(self, adapter, tmp_path):
+        adapter.start()
+        v1 = tmp_path / "v1.mp4"
+        v1.write_bytes(b"fake")
+        v2 = tmp_path / "v2.mp4"
+        v2.write_bytes(b"fake")
+        adapter.add_channel(0, str(v1))
+        adapter.add_channel(1, str(v2))
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+        adapter.set_channel_phase(1, ChannelPhase.ANALYTICS)
+        # Snapshot the pipeline reference; soft-remove keeps it alive.
+        pipeline_before = adapter._shared_pipeline
+        assert pipeline_before is not None
+
+        adapter.set_channel_phase(0, ChannelPhase.REVIEW)
+
+        # Pipeline object identity must be unchanged: no rebuild happened.
+        assert adapter._shared_pipeline is pipeline_before
+        # Channel 1 still active (Analytics) and still attached to the
+        # pipeline; channel 0 is in Review with a soft-removed source.
+        assert adapter.get_channel_phase(0) == ChannelPhase.REVIEW
+        assert adapter.get_channel_phase(1) == ChannelPhase.ANALYTICS
+        assert adapter._states[1].pipeline is pipeline_before
+
+    def test_eos_auto_review_does_not_rebuild_pipeline(self, adapter, tmp_path):
+        adapter.start()
+        v1 = tmp_path / "v1.mp4"
+        v1.write_bytes(b"fake")
+        v2 = tmp_path / "v2.mp4"
+        v2.write_bytes(b"fake")
+        adapter.add_channel(0, str(v1))
+        adapter.add_channel(1, str(v2))
+        adapter.set_channel_phase(0, ChannelPhase.ANALYTICS)
+        adapter.set_channel_phase(1, ChannelPhase.ANALYTICS)
+        pipeline_before = adapter._shared_pipeline
+
+        adapter._on_source_eos(0)
+
+        assert adapter._shared_pipeline is pipeline_before
+        assert adapter.get_channel_phase(0) == ChannelPhase.REVIEW
+        assert adapter.get_channel_phase(1) == ChannelPhase.ANALYTICS
+
+    def test_remove_channel_keeps_others_running(self, adapter, tmp_path):
+        adapter.start()
+        v1 = tmp_path / "v1.mp4"
+        v1.write_bytes(b"fake")
+        v2 = tmp_path / "v2.mp4"
+        v2.write_bytes(b"fake")
+        adapter.add_channel(0, str(v1))
+        adapter.add_channel(1, str(v2))
+        pipeline_before = adapter._shared_pipeline
+
+        adapter.remove_channel(0)
+
+        # Channel 1's pipeline is the same instance as before.
+        assert adapter._shared_pipeline is pipeline_before
+        assert 1 in adapter.channels
+        assert adapter._states[1].pipeline is pipeline_before
+
+    def test_remove_last_channel_destroys_pipeline(self, adapter, tmp_path):
+        """When the *last* remaining channel is removed, the dormant mux +
+        infer + tracker should be torn down so we don't leak resources."""
+        adapter.start()
+        v1 = tmp_path / "v1.mp4"
+        v1.write_bytes(b"fake")
+        adapter.add_channel(0, str(v1))
+        assert adapter._shared_pipeline is not None
+
+        adapter.remove_channel(0)
+
+        assert adapter._shared_pipeline is None
+
+
 class TestCallbacks:
     def test_register_frame_callback(self, adapter):
         cb = MagicMock()
