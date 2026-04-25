@@ -12,12 +12,20 @@ output as local files.
 import logging
 import os
 import subprocess
+import threading
+import time
 
 import cupy as cp
 
 from PyNvVideoCodec import CreateDecoder, CreateDemuxer
 
 logger = logging.getLogger(__name__)
+
+# Bounded wait for gst-launch to begin writing to the FIFO during _init_hls.
+# A real HLS source needs ~1-3 s for DNS + manifest + first segment; this gives
+# generous slack while still failing fast on a misconfig (gst binary missing,
+# codec not present, malformed URL).
+_HLS_INIT_TIMEOUT_S = 15.0
 
 
 class NvDecoder:
@@ -104,9 +112,13 @@ class NvDecoder:
             self._gst_proc.pid,
         )
 
-        # CreateDemuxer blocks on FIFO read until GStreamer starts writing.
-        # Both sides synchronize automatically via the FIFO.
-        self._demuxer = CreateDemuxer(self._fifo_path)
+        # CreateDemuxer's underlying open() on the FIFO blocks until GStreamer
+        # opens the write end. If gst-launch fails to start (binary missing,
+        # codec error, etc.) the writer never appears and CreateDemuxer would
+        # block forever — halting the pipeline thread for every channel. Race
+        # the demuxer-open against gst.poll() so a gst exit surfaces as a
+        # clean RuntimeError instead of a multi-channel deadlock (B15).
+        self._demuxer = self._open_demuxer_with_timeout()
         self._decoder = CreateDecoder(
             gpuid=0,
             codec=self._demuxer.GetNvCodecId(),
@@ -115,6 +127,79 @@ class NvDecoder:
         self._width = self._demuxer.Width()
         self._height = self._demuxer.Height()
         self._fps = self._demuxer.FrameRate()
+
+    def _open_demuxer_with_timeout(self):
+        """Open the FIFO-backed demuxer, racing against gst-launch exit.
+
+        Runs ``CreateDemuxer`` on a worker thread so we can poll
+        ``self._gst_proc`` for early exit. If gst exits before any writer
+        connects, briefly open the FIFO write end ourselves to unblock the
+        demuxer thread (so it doesn't leak as a perpetually-stuck thread)
+        and raise ``RuntimeError`` with the gst stderr tail.
+        """
+        result: dict = {}
+
+        def _open():
+            try:
+                result["demuxer"] = CreateDemuxer(self._fifo_path)
+            except Exception as exc:
+                result["error"] = exc
+
+        t = threading.Thread(
+            target=_open,
+            name=f"hls-demuxer-open-{self._channel_id}",
+            daemon=True,
+        )
+        t.start()
+
+        deadline = time.monotonic() + _HLS_INIT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if result:
+                break
+            rc = self._gst_proc.poll()
+            if rc is not None:
+                stderr = ""
+                if self._gst_proc.stderr is not None:
+                    try:
+                        stderr = self._gst_proc.stderr.read(4096).decode(
+                            "utf-8", "replace",
+                        )
+                    except Exception:
+                        pass
+                # Unblock the worker so it doesn't outlive us as a stuck
+                # thread holding a FIFO fd.
+                self._unblock_fifo_reader()
+                raise RuntimeError(
+                    "gst-launch exited before HLS source ready "
+                    f"(rc={rc}): {stderr.strip()[-300:]}"
+                )
+            time.sleep(0.05)
+        else:
+            self._unblock_fifo_reader()
+            raise TimeoutError(
+                f"gst-launch did not begin writing within {_HLS_INIT_TIMEOUT_S}s"
+            )
+
+        if "error" in result:
+            raise result["error"]
+        return result["demuxer"]
+
+    def _unblock_fifo_reader(self) -> None:
+        """Briefly open the FIFO write end and close it.
+
+        The blocking ``open(O_RDONLY)`` on the FIFO from CreateDemuxer's
+        worker returns as soon as any writer connects; opening + closing the
+        write side immediately gives it an EOF and lets the worker fall
+        through to its error path instead of leaking forever.
+        """
+        if not self._fifo_path:
+            return
+        try:
+            fd = os.open(self._fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+            os.close(fd)
+        except OSError:
+            # FIFO already gone, or kernel reports no readers — both fine.
+            pass
 
     def read(self) -> tuple[cp.ndarray | None, int]:
         """Decode next frame.
