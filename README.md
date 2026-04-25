@@ -11,7 +11,7 @@ GPU-accelerated vehicle tracking for traffic junction monitoring. Detects vehicl
 - **Directional transit detection** — entry/exit directions (e.g., "west to north")
 - **Stagnant vehicle alerts** — vehicles stopped for configurable duration (default 2.5 min)
 - **Best-photo capture** — highest quality frame of each tracked vehicle
-- **Multi-channel** — up to 8 channels sharing a single GPU pipeline (~280 MB VRAM saved per channel)
+- **Multi-channel** — multiple sources share a single GPU pipeline (saves ~280 MB VRAM per added channel vs separate pipelines). N-channel support is architectural (no hard limit in the code); see *Hardware sizing* below for what we've actually validated.
 - **YouTube Live support** — monitor live traffic camera streams directly
 - **4-phase workflow** — Setup (draw ROI/lines) -> Analytics (run detection) -> Review (replay alerts)
 - **Browser UI** — live MJPEG video, ROI/line drawing tools, alert feed, video replay
@@ -22,6 +22,16 @@ GPU-accelerated vehicle tracking for traffic junction monitoring. Detects vehicl
 - **Docker Engine** >= 24.0 with Docker Compose v2
 - **NVIDIA Container Toolkit** ([install guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
 - **make** (`sudo apt install make`)
+
+## Hardware sizing
+
+The code architecturally supports N concurrent channels (see PRD F-03 / F-08j) — there is no hard limit on `add_channel`. What you can actually run depends on the GPU you're on, the source resolution / FPS, and detection density:
+
+- **What we've validated:** 1 channel of 1080p @ 60 FPS Analytics on RTX 4050 (6 GB VRAM) runs at real-time (≈1.02× source duration, both backends). 30 FPS sources have substantial headroom.
+- **What we've measured under stress:** 2 concurrent 1080p Analytics streams on the same 4050 saturate the GPU — the heavier (60 FPS, dense) channel slows to a fraction of source rate. Two light channels (30 FPS, sparse scenes) co-exist comfortably.
+- **What we haven't tested:** ≥3 concurrent channels on this hardware, or any channel count on bigger GPUs (A4000/A100/4090). The "8 channels" mentioned in design notes is the *target ceiling* on a server-class GPU, not a 4050 number.
+
+Practical guidance: budget ~17 ms per processed frame per Analytics channel (1080p, ~20 vehicles, FP16) on a 4050. If you have N channels at S source FPS each, you need N × S × 17 ms ≤ 1000 ms of GPU/frame time. Two 60 FPS channels on a 4050 = ~2.0 s of GPU work per second of wall-clock. The custom backend caps processing at 30 FPS (decoding still happens at native rate, but inference/render is rate-limited), so plug N × 30 × 17 ms ≈ 510 ms × N — meaning ~2 channels is the comfortable limit on a 4050 even after the cap.
 
 ## Quick Start
 
